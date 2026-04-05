@@ -1,0 +1,18 @@
+# OmniMedia Converter & Downloader — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# ── GUI framework ──────────────────────────────────────────────────────────────
+PyQt6>=6.6.0
+
+# ── Downloader ─────────────────────────────────────────────────────────────────
+yt-dlp>=2024.1.1
+
+# ── FFmpeg Python bindings (optional — used only for detection helpers) ────────
+# FFmpeg itself must be installed separately (see README).
+# The 'ffmpeg-python' package is NOT required; we call ffmpeg via subprocess.
+
+# ── Dev / Quality tools (optional) ────────────────────────────────────────────
+# Uncomment if you want linting & formatting:
+# black>=24.0.0
+# pylint>=3.0.0
+# mypy>=1.8.0
