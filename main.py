@@ -1423,16 +1423,16 @@ class SettingsTab(QWidget):
 
     def _setup_ui(self) -> None:  # noqa: C901
         from PyQt6.QtWidgets import QSlider
-        outer = QVBoxLayout(self); outer.setContentsMargins(0,0,0,0)
+        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         container = QWidget(); scroll.setWidget(container); outer.addWidget(scroll)
-        inner = QVBoxLayout(container); inner.setContentsMargins(28,24,28,24); inner.setSpacing(18)
+        inner = QVBoxLayout(container); inner.setContentsMargins(28, 24, 28, 24); inner.setSpacing(18)
 
         hdr = QHBoxLayout()
         ic = QLabel("⚙"); ic.setStyleSheet("font-size:24px; background:transparent;")
-        hdr.addWidget(ic); hdr.addWidget(make_label(t("settings_title"),"title")); hdr.addStretch()
+        hdr.addWidget(ic); hdr.addWidget(make_label(t("settings_title"), "title")); hdr.addStretch()
         inner.addLayout(hdr)
 
         # ══════════════════════════════════════════════════════════════════════
@@ -1440,9 +1440,9 @@ class SettingsTab(QWidget):
         # ══════════════════════════════════════════════════════════════════════
         app_card, _, app_content = make_card("🎨", t("appearance_card_title"))
 
-        # Thème
+        # — Thème visuel
         app_content.addWidget(make_section("THÈME VISUEL"))
-        theme_preview_row = QHBoxLayout(); theme_preview_row.setSpacing(12)
+        theme_row = QHBoxLayout(); theme_row.setSpacing(10)
         self._theme_btns: dict[str, QPushButton] = {}
         current_theme = ThemeManager.current()
         for key, obj_name, label in [
@@ -1454,12 +1454,13 @@ class SettingsTab(QWidget):
             btn = QPushButton(label); btn.setObjectName(obj_name)
             btn.setCheckable(True); btn.setChecked(key == current_theme)
             btn.clicked.connect(lambda _, k=key: self._apply_theme(k))
-            self._theme_btns[key] = btn; theme_preview_row.addWidget(btn)
-        theme_preview_row.addStretch(); app_content.addLayout(theme_preview_row)
-        desc = QLabel(t("theme_desc")); desc.setObjectName("subtitle"); desc.setWordWrap(True)
-        app_content.addWidget(desc)
+            self._theme_btns[key] = btn; theme_row.addWidget(btn)
+        theme_row.addStretch(); app_content.addLayout(theme_row)
+        app_content.addWidget(QLabel(t("theme_desc")) )
+        app_content.itemAt(app_content.count() - 1).widget().setObjectName("subtitle")
 
-        # Couleur d'accent
+        # — Couleur d'accent
+        app_content.addWidget(hline())
         app_content.addWidget(make_section(t("accent_color_label")))
         accent_row = QHBoxLayout(); accent_row.setSpacing(10)
         self._accent_btns: dict[str, QPushButton] = {}
@@ -1472,24 +1473,26 @@ class SettingsTab(QWidget):
             self._accent_btns[key] = btn; accent_row.addWidget(btn)
         accent_row.addStretch(); app_content.addLayout(accent_row)
 
-        # Opacité
+        # — Opacité de la fenêtre
+        app_content.addWidget(hline())
         app_content.addWidget(make_section(t("opacity_label")))
         opacity_row = QHBoxLayout(); opacity_row.setSpacing(12)
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(70, 100); self._opacity_slider.setValue(cfg.window_opacity)
-        self._opacity_slider.setFixedWidth(180)
+        self._opacity_slider.setFixedWidth(200)
         self._opacity_lbl = QLabel(f"{cfg.window_opacity} %")
         self._opacity_lbl.setObjectName("status_info"); self._opacity_lbl.setFixedWidth(44)
         self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
         opacity_row.addWidget(self._opacity_slider); opacity_row.addWidget(self._opacity_lbl)
         opacity_row.addStretch(); app_content.addLayout(opacity_row)
 
-        # Langue
-        app_content.addWidget(hline()); app_content.addWidget(make_section("LANGUE"))
+        # — Langue
+        app_content.addWidget(hline())
+        app_content.addWidget(make_section("LANGUE"))
         lang_row = QHBoxLayout(); lang_row.setSpacing(10)
         self._lang_btns: dict[str, QPushButton] = {}
         cur_lang = current_language()
-        for label, key in [(t("lang_en"),"en"),(t("lang_fr"),"fr")]:
+        for label, key in [(t("lang_en"), "en"), (t("lang_fr"), "fr")]:
             btn = QPushButton(label); btn.setObjectName("theme_btn"); btn.setCheckable(True)
             btn.setChecked(key == cur_lang); btn.setFixedHeight(36)
             btn.clicked.connect(lambda _, k=key: self._apply_language(k))
@@ -1498,27 +1501,60 @@ class SettingsTab(QWidget):
         restart_lbl = QLabel("⚠  Le changement de langue s'applique après redémarrage.")
         restart_lbl.setObjectName("subtitle"); app_content.addWidget(restart_lbl)
 
-        # Tray toggles
-        app_content.addWidget(hline())
+        inner.addWidget(app_card)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # CARTE 2 : Zone de notification (Tray)
+        # Regroupée ici pour avoir toutes les options tray au même endroit
+        # ══════════════════════════════════════════════════════════════════════
+        tray_card, _, tray_content = make_card("🗔", "Zone de notification (Tray)")
+
+        # Toggle maître : réduire dans le tray à la fermeture
         self._tray_close_cb = make_toggle(
             t("tray_on_close"), cfg.minimize_to_tray,
-            lambda v: setattr(cfg, "minimize_to_tray", v)
+            self._on_tray_close_toggled
         )
+        tray_content.addWidget(self._tray_close_cb)
+
+        # Sous-options tray (désactivées si master = False)
+        self._tray_sub_widget = QWidget()
+        tray_sub = QVBoxLayout(self._tray_sub_widget)
+        tray_sub.setContentsMargins(16, 4, 0, 0); tray_sub.setSpacing(8)
+
         self._tray_start_cb = make_toggle(
             t("start_in_tray"), cfg.start_in_tray,
             lambda v: setattr(cfg, "start_in_tray", v)
         )
-        app_content.addWidget(self._tray_close_cb)
-        app_content.addWidget(self._tray_start_cb)
+        self.notif_tray_cb = make_toggle(
+            t("notif_tray_bg"), cfg.notif_tray_bg,
+            lambda v: setattr(cfg, "notif_tray_bg", v)
+        )
+        tray_sub.addWidget(self._tray_start_cb)
+        tray_sub.addWidget(self.notif_tray_cb)
+        tray_content.addWidget(self._tray_sub_widget)
+        self._tray_sub_widget.setEnabled(cfg.minimize_to_tray)
 
-        inner.addWidget(app_card)
+        # Bouton de désactivation immédiate (session courante + config)
+        tray_content.addWidget(hline())
+        dis_tray_row = QHBoxLayout()
+        self._dis_tray_btn = QPushButton(t("disable_tray_btn"))
+        self._dis_tray_btn.setObjectName("btn_secondary")
+        self._dis_tray_btn.setFixedHeight(36)
+        self._dis_tray_btn.setEnabled(cfg.minimize_to_tray)
+        self._dis_tray_btn.clicked.connect(self._maint_disable_tray)
+        dis_tray_row.addWidget(self._dis_tray_btn); dis_tray_row.addStretch()
+        tray_content.addLayout(dis_tray_row)
+        self._tray_status = QLabel(""); self._tray_status.setObjectName("status_info")
+        tray_content.addWidget(self._tray_status)
+
+        inner.addWidget(tray_card)
 
         # ══════════════════════════════════════════════════════════════════════
-        # CARTE 2 : Moteur de téléchargement (yt-dlp)
+        # CARTE 3 : Moteur de téléchargement (yt-dlp)
         # ══════════════════════════════════════════════════════════════════════
         dl_eng_card, _, dl_eng_content = make_card("⬇", t("download_engine_card"))
 
-        # Qualité préférée
+        # — Qualité préférée
         dl_eng_content.addWidget(make_section(t("preferred_quality_label")))
         self._quality_combo = QComboBox()
         for key, lbl in [("best", t("quality_best")), ("2160", t("quality_4k")),
@@ -1531,21 +1567,20 @@ class SettingsTab(QWidget):
         )
         dl_eng_content.addWidget(self._quality_combo)
 
-        # Mode Playlist
+        # — Mode Playlist & Auto-Tag
+        dl_eng_content.addWidget(hline())
         self._playlist_mode_cb = make_toggle(
             t("playlist_mode"), cfg.playlist_mode,
             lambda v: setattr(cfg, "playlist_mode", v)
         )
-        dl_eng_content.addWidget(self._playlist_mode_cb)
-
-        # Auto-Tag
         self._auto_tag_cb = make_toggle(
             t("auto_tag"), cfg.auto_tag,
             lambda v: setattr(cfg, "auto_tag", v)
         )
+        dl_eng_content.addWidget(self._playlist_mode_cb)
         dl_eng_content.addWidget(self._auto_tag_cb)
 
-        # Cookies navigateur
+        # — Cookies navigateur
         dl_eng_content.addWidget(hline())
         dl_eng_content.addWidget(make_section(t("browser_cookies_label")))
         self._browser_combo = QComboBox()
@@ -1559,9 +1594,10 @@ class SettingsTab(QWidget):
         )
         dl_eng_content.addWidget(self._browser_combo)
 
-        # Mise à jour yt-dlp
+        # — Mise à jour yt-dlp
         dl_eng_content.addWidget(hline())
-        ytdlp_row = QHBoxLayout()
+        dl_eng_content.addWidget(make_section("MISE À JOUR DU MOTEUR"))
+        ytdlp_row = QHBoxLayout(); ytdlp_row.setSpacing(12)
         try:
             import yt_dlp as _ydl; ver = getattr(_ydl.version, "__version__", "?")
             ytdlp_row.addWidget(QLabel(t("ytdlp_version", ver=ver)))
@@ -1571,13 +1607,13 @@ class SettingsTab(QWidget):
         self.update_btn = QPushButton(t("ytdlp_update_btn")); self.update_btn.setFixedHeight(36)
         self.update_btn.clicked.connect(self._run_ytdlp_update); ytdlp_row.addWidget(self.update_btn)
         dl_eng_content.addLayout(ytdlp_row)
-        self.update_status = QLabel(""); self.update_status.setObjectName("status_info"); self.update_status.setWordWrap(True)
-        dl_eng_content.addWidget(self.update_status)
+        self.update_status = QLabel(""); self.update_status.setObjectName("status_info")
+        self.update_status.setWordWrap(True); dl_eng_content.addWidget(self.update_status)
 
         inner.addWidget(dl_eng_card)
 
         # ══════════════════════════════════════════════════════════════════════
-        # CARTE 3 : Conversion & Compression (FFmpeg)
+        # CARTE 4 : Conversion & Compression (FFmpeg)
         # ══════════════════════════════════════════════════════════════════════
         ffmpeg_card, ffmpeg_hdr, ffmpeg_content = make_card("🎞", t("conversion_card_title"))
 
@@ -1586,7 +1622,7 @@ class SettingsTab(QWidget):
         ffmpeg_hdr.insertWidget(2, self._ffmpeg_dot)
         self._update_ffmpeg_dot()
 
-        # Chemin FFmpeg
+        # — Statut + chemin FFmpeg
         ffpath = find_ffmpeg()
         ff_lbl = QLabel(t("ffmpeg_found", path=ffpath) if ffpath else t("ffmpeg_missing_lbl"))
         ff_lbl.setObjectName("status_ok" if ffpath else "status_err")
@@ -1612,20 +1648,22 @@ class SettingsTab(QWidget):
         self.ffmpeg_path_status = QLabel(""); self.ffmpeg_path_status.setObjectName("status_info")
         ffmpeg_content.addWidget(self.ffmpeg_path_status)
 
-        # Threads CPU
+        # — Threads CPU et priorité côte-à-côte
         ffmpeg_content.addWidget(hline())
-        ffmpeg_content.addWidget(make_section(t("ffmpeg_threads_label")))
-        threads_row = QHBoxLayout(); threads_row.setSpacing(12)
+        cpu_row = QHBoxLayout(); cpu_row.setSpacing(24)
+
+        threads_col = QVBoxLayout()
+        threads_col.addWidget(make_section(t("ffmpeg_threads_label")))
         self._threads_spin = QSpinBox(); self._threads_spin.setRange(0, 32)
-        self._threads_spin.setValue(cfg.ffmpeg_threads); self._threads_spin.setFixedWidth(70)
+        self._threads_spin.setValue(cfg.ffmpeg_threads); self._threads_spin.setFixedWidth(80)
         self._threads_spin.setSpecialValueText("Auto")
         self._threads_spin.valueChanged.connect(lambda v: setattr(cfg, "ffmpeg_threads", v))
-        threads_row.addWidget(self._threads_spin); threads_row.addStretch()
-        ffmpeg_content.addLayout(threads_row)
+        threads_col.addWidget(self._threads_spin)
+        cpu_row.addLayout(threads_col)
 
-        # Priorité processus
-        ffmpeg_content.addWidget(make_section(t("ffmpeg_priority_label")))
-        self._priority_combo = QComboBox()
+        priority_col = QVBoxLayout()
+        priority_col.addWidget(make_section(t("ffmpeg_priority_label")))
+        self._priority_combo = QComboBox(); self._priority_combo.setMinimumWidth(200)
         for key, lbl in [("low", t("priority_low")), ("normal", t("priority_normal")), ("high", t("priority_high"))]:
             self._priority_combo.addItem(lbl, key)
         pidx = self._priority_combo.findData(cfg.ffmpeg_priority)
@@ -1633,17 +1671,12 @@ class SettingsTab(QWidget):
         self._priority_combo.currentIndexChanged.connect(
             lambda: setattr(cfg, "ffmpeg_priority", self._priority_combo.currentData())
         )
-        ffmpeg_content.addWidget(self._priority_combo)
+        priority_col.addWidget(self._priority_combo)
+        cpu_row.addLayout(priority_col)
+        cpu_row.addStretch()
+        ffmpeg_content.addLayout(cpu_row)
 
-        # Supprimer source
-        ffmpeg_content.addWidget(hline())
-        self._del_source_cb = make_toggle(
-            t("delete_source_toggle"), cfg.delete_source,
-            lambda v: setattr(cfg, "delete_source", v)
-        )
-        ffmpeg_content.addWidget(self._del_source_cb)
-
-        # Conversions parallèles
+        # — Conversions parallèles
         ffmpeg_content.addWidget(hline())
         par_row = QHBoxLayout(); par_row.setSpacing(12)
         par_lbl = QLabel(t("parallel_label")); par_lbl.setObjectName("status_info")
@@ -1655,23 +1688,33 @@ class SettingsTab(QWidget):
         pd = QLabel(t("parallel_desc")); pd.setObjectName("subtitle"); pd.setWordWrap(True)
         ffmpeg_content.addWidget(pd)
 
+        # — Supprimer le fichier source
+        ffmpeg_content.addWidget(hline())
+        self._del_source_cb = make_toggle(
+            t("delete_source_toggle"), cfg.delete_source,
+            lambda v: setattr(cfg, "delete_source", v)
+        )
+        ffmpeg_content.addWidget(self._del_source_cb)
+
         inner.addWidget(ffmpeg_card)
 
         # ══════════════════════════════════════════════════════════════════════
-        # CARTE 4 : Destinations & Organisation
+        # CARTE 5 : Destinations & Organisation
         # ══════════════════════════════════════════════════════════════════════
         dest_card, _, dest_content = make_card("📁", t("destinations_card_title"))
 
+        # — Dossier de sortie
         dest_content.addWidget(make_section(t("output_dir_label")))
         dest_dir_row = QHBoxLayout(); dest_dir_row.setSpacing(8)
-        self._dest_dir_lbl = QLabel(str(cfg.download_dir)); self._dest_dir_lbl.setObjectName("status_info")
-        self._dest_dir_lbl.setWordWrap(True)
+        self._dest_dir_lbl = QLabel(str(cfg.download_dir))
+        self._dest_dir_lbl.setObjectName("status_info"); self._dest_dir_lbl.setWordWrap(True)
         self._dest_dir_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         dest_browse_btn = QPushButton("📁 Choisir"); dest_browse_btn.setObjectName("btn_secondary")
         dest_browse_btn.setFixedHeight(34); dest_browse_btn.clicked.connect(self._choose_output_dir)
         dest_dir_row.addWidget(self._dest_dir_lbl, 1); dest_dir_row.addWidget(dest_browse_btn)
         dest_content.addLayout(dest_dir_row)
 
+        # — Sous-dossiers automatiques
         dest_content.addWidget(hline())
         self._auto_sub_cb = make_toggle(
             t("auto_subfolders_toggle"), cfg.auto_subfolders,
@@ -1679,6 +1722,7 @@ class SettingsTab(QWidget):
         )
         dest_content.addWidget(self._auto_sub_cb)
 
+        # — Format de nommage
         dest_content.addWidget(hline())
         dest_content.addWidget(make_section(t("file_naming_label")))
         self._naming_combo = QComboBox()
@@ -1694,25 +1738,27 @@ class SettingsTab(QWidget):
         inner.addWidget(dest_card)
 
         # ══════════════════════════════════════════════════════════════════════
-        # CARTE 5 : Notifications & Sons
+        # CARTE 6 : Notifications & Sons
         # ══════════════════════════════════════════════════════════════════════
         notif_card, _, notif_content = make_card("🔔", t("notif_card_title"))
 
+        # Toggle maître
         self.notif_master = make_toggle(
             "Activer les notifications système", cfg.notifications, self._on_notif_master_toggled
         )
         notif_content.addWidget(self.notif_master)
 
+        # Sous-options (indentées, désactivées si master = False)
         self._notif_options_widget = QWidget()
-        nopt = QVBoxLayout(self._notif_options_widget); nopt.setContentsMargins(8, 4, 0, 0); nopt.setSpacing(10)
+        nopt = QVBoxLayout(self._notif_options_widget)
+        nopt.setContentsMargins(16, 4, 0, 0); nopt.setSpacing(8)
 
-        self.notif_dl_cb   = make_toggle("📥  Fin de téléchargement",          cfg.notif_on_download, lambda v: setattr(cfg, "notif_on_download", v))
-        self.notif_conv_cb = make_toggle("🔄  Fin de conversion / compression", cfg.notif_on_convert,  lambda v: setattr(cfg, "notif_on_convert", v))
-        self.notif_err_cb  = make_toggle("❌  En cas d'erreur",                 cfg.notif_on_error,    lambda v: setattr(cfg, "notif_on_error", v))
-        self.notif_tray_cb = make_toggle(t("notif_tray_bg"),                   cfg.notif_tray_bg,     lambda v: setattr(cfg, "notif_tray_bg", v))
-        self.notif_sound_cb = make_toggle("🔊  Son de notification (Windows / macOS)", cfg.notif_sound, lambda v: setattr(cfg, "notif_sound", v))
+        self.notif_dl_cb    = make_toggle("📥  Fin de téléchargement",          cfg.notif_on_download, lambda v: setattr(cfg, "notif_on_download", v))
+        self.notif_conv_cb  = make_toggle("🔄  Fin de conversion / compression", cfg.notif_on_convert,  lambda v: setattr(cfg, "notif_on_convert", v))
+        self.notif_err_cb   = make_toggle("❌  En cas d'erreur",                 cfg.notif_on_error,    lambda v: setattr(cfg, "notif_on_error", v))
+        self.notif_sound_cb = make_toggle("🔊  Son de notification (Windows / macOS)", cfg.notif_sound,  lambda v: setattr(cfg, "notif_sound", v))
 
-        for w in [self.notif_dl_cb, self.notif_conv_cb, self.notif_err_cb, self.notif_tray_cb, self.notif_sound_cb]:
+        for w in [self.notif_dl_cb, self.notif_conv_cb, self.notif_err_cb, self.notif_sound_cb]:
             nopt.addWidget(w)
 
         notif_content.addWidget(self._notif_options_widget)
@@ -1721,63 +1767,65 @@ class SettingsTab(QWidget):
         inner.addWidget(notif_card)
 
         # ══════════════════════════════════════════════════════════════════════
-        # CARTE 6 : Presets personnalisés
+        # CARTE 7 : Presets personnalisés
         # ══════════════════════════════════════════════════════════════════════
         preset_card, _, preset_content = make_card("⭐", "Presets personnalisés")
 
-        self.preset_name_inp = QLineEdit(); self.preset_name_inp.setPlaceholderText(t("preset_name_ph"))
+        self.preset_name_inp = QLineEdit()
+        self.preset_name_inp.setPlaceholderText(t("preset_name_ph"))
         preset_content.addWidget(self.preset_name_inp)
+
         pr_row = QHBoxLayout(); pr_row.setSpacing(12)
         fmt_col = QVBoxLayout(); fmt_col.addWidget(make_section(t("preset_fmt_label")))
         self.preset_fmt_combo = QComboBox()
-        for f in ["mp4","mp3","mkv","flac","wav","gif","jpg","png"]: self.preset_fmt_combo.addItem(f,f)
+        for f in ["mp4", "mp3", "mkv", "flac", "wav", "gif", "jpg", "png"]:
+            self.preset_fmt_combo.addItem(f, f)
         fmt_col.addWidget(self.preset_fmt_combo); pr_row.addLayout(fmt_col)
         args_col = QVBoxLayout(); args_col.addWidget(make_section(t("preset_args_label")))
-        self.preset_args_inp = QLineEdit(); self.preset_args_inp.setPlaceholderText(t("preset_args_ph"))
-        args_col.addWidget(self.preset_args_inp); pr_row.addLayout(args_col, 1); preset_content.addLayout(pr_row)
+        self.preset_args_inp = QLineEdit()
+        self.preset_args_inp.setPlaceholderText(t("preset_args_ph"))
+        args_col.addWidget(self.preset_args_inp); pr_row.addLayout(args_col, 1)
+        preset_content.addLayout(pr_row)
+
         pr_btn_row = QHBoxLayout()
-        save_btn = QPushButton(t("save_preset")); save_btn.setFixedHeight(34); save_btn.clicked.connect(self._save_preset)
-        del_btn = QPushButton(t("delete_preset")); del_btn.setObjectName("btn_danger"); del_btn.setFixedHeight(34)
-        del_btn.clicked.connect(self._delete_preset)
+        save_btn = QPushButton(t("save_preset")); save_btn.setFixedHeight(34)
+        save_btn.clicked.connect(self._save_preset)
+        del_btn = QPushButton(t("delete_preset")); del_btn.setObjectName("btn_danger")
+        del_btn.setFixedHeight(34); del_btn.clicked.connect(self._delete_preset)
         pr_btn_row.addWidget(save_btn); pr_btn_row.addWidget(del_btn); pr_btn_row.addStretch()
         preset_content.addLayout(pr_btn_row)
+
         self.preset_status = QLabel(""); self.preset_status.setObjectName("status_info")
         preset_content.addWidget(self.preset_status)
         self.preset_list = QListWidget(); self.preset_list.setMaximumHeight(80)
-        self.preset_list.itemClicked.connect(self._select_preset); preset_content.addWidget(self.preset_list)
+        self.preset_list.itemClicked.connect(self._select_preset)
+        preset_content.addWidget(self.preset_list)
         self._refresh_preset_list()
         inner.addWidget(preset_card)
 
         # ══════════════════════════════════════════════════════════════════════
-        # CARTE 7 : Maintenance & Aide
+        # CARTE 8 : Maintenance & Aide
         # ══════════════════════════════════════════════════════════════════════
         maint_card, _, maint_content = make_card("🔧", t("maintenance_card_title"))
 
-        maint_btn_row1 = QHBoxLayout(); maint_btn_row1.setSpacing(10)
-        clr_hist_btn = QPushButton(t("clear_dl_history_btn")); clr_hist_btn.setObjectName("btn_secondary")
-        clr_hist_btn.setFixedHeight(36); clr_hist_btn.clicked.connect(self._maint_clear_history)
-        maint_btn_row1.addWidget(clr_hist_btn); maint_btn_row1.addStretch()
-        maint_content.addLayout(maint_btn_row1)
+        # Deux boutons utilitaires côte-à-côte
+        util_row = QHBoxLayout(); util_row.setSpacing(10)
+        clr_hist_btn = QPushButton(t("clear_dl_history_btn"))
+        clr_hist_btn.setObjectName("btn_secondary"); clr_hist_btn.setFixedHeight(36)
+        clr_hist_btn.clicked.connect(self._maint_clear_history)
+        open_log_btn = QPushButton(t("open_log_btn"))
+        open_log_btn.setObjectName("btn_secondary"); open_log_btn.setFixedHeight(36)
+        open_log_btn.clicked.connect(self._maint_open_log)
+        util_row.addWidget(clr_hist_btn); util_row.addWidget(open_log_btn); util_row.addStretch()
+        maint_content.addLayout(util_row)
 
-        maint_btn_row2 = QHBoxLayout(); maint_btn_row2.setSpacing(10)
-        open_log_btn = QPushButton(t("open_log_btn")); open_log_btn.setObjectName("btn_secondary")
-        open_log_btn.setFixedHeight(36); open_log_btn.clicked.connect(self._maint_open_log)
-        maint_btn_row2.addWidget(open_log_btn); maint_btn_row2.addStretch()
-        maint_content.addLayout(maint_btn_row2)
-
+        # Bouton destructif : réinitialisation
         maint_content.addWidget(hline())
-
-        maint_btn_row3 = QHBoxLayout(); maint_btn_row3.setSpacing(10)
-        dis_tray_btn = QPushButton(t("disable_tray_btn")); dis_tray_btn.setObjectName("btn_secondary")
-        dis_tray_btn.setFixedHeight(36); dis_tray_btn.clicked.connect(self._maint_disable_tray)
-        maint_btn_row3.addWidget(dis_tray_btn); maint_btn_row3.addStretch()
-        maint_content.addLayout(maint_btn_row3)
-
-        maint_content.addWidget(hline())
-
+        reset_row = QHBoxLayout()
         reset_btn = QPushButton(t("reset_settings_btn")); reset_btn.setObjectName("btn_danger")
         reset_btn.setFixedHeight(36); reset_btn.clicked.connect(self._maint_reset_settings)
-        maint_content.addWidget(reset_btn)
+        reset_row.addWidget(reset_btn); reset_row.addStretch()
+        maint_content.addLayout(reset_row)
 
         self._maint_status = QLabel(""); self._maint_status.setObjectName("status_info")
         maint_content.addWidget(self._maint_status)
@@ -1785,13 +1833,12 @@ class SettingsTab(QWidget):
         inner.addWidget(maint_card)
 
         # ══════════════════════════════════════════════════════════════════════
-        # CARTE 8 : À propos
+        # CARTE 9 : À propos
         # ══════════════════════════════════════════════════════════════════════
         about_card, _, about_content = make_card("ℹ", "À propos")
-
         about_content.addWidget(QLabel(f"OmniMedia  v{APP_VERSION}"))
-        self.version_status = QLabel(t("checking_version")); self.version_status.setObjectName("status_info")
-        about_content.addWidget(self.version_status)
+        self.version_status = QLabel(t("checking_version"))
+        self.version_status.setObjectName("status_info"); about_content.addWidget(self.version_status)
         gh = QLabel(f'<a href="https://github.com/SanoBld/OmniMedia" style="color:#5A96FF;">{t("github_link")}</a>')
         gh.setOpenExternalLinks(True); gh.setTextFormat(Qt.TextFormat.RichText)
         about_content.addWidget(gh)
@@ -1836,6 +1883,18 @@ class SettingsTab(QWidget):
         cfg.notifications = enabled
         self._notif_options_widget.setEnabled(enabled)
 
+    def _on_tray_close_toggled(self, enabled: bool) -> None:
+        """Active/désactive le mode tray pour la fermeture — persisté ET appliqué à la session courante."""
+        cfg.minimize_to_tray = enabled
+        self._tray_sub_widget.setEnabled(enabled)
+        self._dis_tray_btn.setEnabled(enabled)
+        # Si on désactive, on masque aussi l'icône tray de la session courante
+        win = self.window()
+        if not enabled and hasattr(win, "_tray") and win._tray is not None:
+            win._tray.hide()
+        elif enabled and hasattr(win, "_tray") and win._tray is not None:
+            win._tray.show()
+
     def _apply_accent(self, key: str) -> None:
         cfg.accent_color = key
         for k, btn in self._accent_btns.items(): btn.setChecked(k == key)
@@ -1867,9 +1926,19 @@ class SettingsTab(QWidget):
             set_status(self._maint_status, t("log_not_found"), "warn")
 
     def _maint_disable_tray(self) -> None:
+        """Désactive immédiatement le tray (session courante + config) et met à jour les toggles."""
         cfg.minimize_to_tray = False
+        cfg.start_in_tray = False
+        # Sync toggles
         self._tray_close_cb.setChecked(False)
-        set_status(self._maint_status, "✔  Mode arrière-plan désactivé.", "ok")
+        self._tray_start_cb.setChecked(False)
+        self._tray_sub_widget.setEnabled(False)
+        self._dis_tray_btn.setEnabled(False)
+        # Masquer l'icône tray dans la session courante
+        win = self.window()
+        if hasattr(win, "_tray") and win._tray is not None:
+            win._tray.hide()
+        set_status(self._tray_status, "✔  Mode arrière-plan désactivé.", "ok")
 
     def _maint_reset_settings(self) -> None:
         reply = QMessageBox.question(
