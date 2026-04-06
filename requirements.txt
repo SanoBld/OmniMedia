@@ -1,4 +1,4 @@
-# OmniMedia Converter & Downloader — Python dependencies
+# OmniMedia Converter & Downloader v4 — Python dependencies
 # Install with: pip install -r requirements.txt
 
 # ── GUI framework ──────────────────────────────────────────────────────────────
@@ -7,12 +7,28 @@ PyQt6>=6.6.0
 # ── Downloader ─────────────────────────────────────────────────────────────────
 yt-dlp>=2024.1.1
 
-# ── FFmpeg Python bindings (optional — used only for detection helpers) ────────
-# FFmpeg itself must be installed separately (see README).
-# The 'ffmpeg-python' package is NOT required; we call ffmpeg via subprocess.
+# ── Audio metadata & album art embedding ───────────────────────────────────────
+# Used to embed YouTube thumbnails + ID3 tags (title, artist, album, year, genre)
+mutagen>=1.47.0
+
+# ── Browser cookie auto-import ─────────────────────────────────────────────────
+# Optional — allows yt-dlp to reuse cookies from Chrome/Firefox/Edge/Brave/Opera.
+# The app works without it; the "Import from browser" button will be disabled.
+browser-cookie3>=0.19.1
+
+# ── System theme detection (dark / light auto mode) ───────────────────────────
+# Reads the OS appearance setting on Windows, macOS, and Linux (GTK).
+darkdetect>=0.8.0
+
+# ── HTTP requests (version checker, thumbnail fetching fallback) ───────────────
+requests>=2.31.0
+
+# ── Packaging ─────────────────────────────────────────────────────────────────
+# Used to build the standalone OmniMedia.exe — not needed at runtime.
+pyinstaller>=6.4.0
 
 # ── Dev / Quality tools (optional) ────────────────────────────────────────────
-# Uncomment if you want linting & formatting:
+# Uncomment to enable linting & formatting in your editor:
 # black>=24.0.0
 # pylint>=3.0.0
 # mypy>=1.8.0

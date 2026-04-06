@@ -1,21 +1,19 @@
 """
-downloader.py — yt-dlp download logic running in a QThread.
-
-CORRECTIONS v2 :
-  - Suppression du double appel extract_info/download (causait le blocage).
-  - quiet=True désactivait les hooks de progression → remplacé par noprogress=True.
-  - Un seul extract_info(download=True) gère tout en un passage.
-  - Passage des options avancées (codec, bitrate, résolution) via AdvancedOptions.
+downloader.py — OmniMedia v4
+New in v4: sanitize_filename, .part cleanup on cancel,
+playlist folder mode, smart ID3 auto-tagging via yt-dlp metadata.
 """
 from __future__ import annotations
 
-import re
-import os
+import re, os, json, shutil, tempfile, urllib.request
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Callable
 
 from PyQt6.QtCore import QThread, pyqtSignal
+
+from config_manager import cfg, resource_path  # centralised settings
 
 try:
     import yt_dlp
@@ -23,208 +21,428 @@ try:
 except ImportError:
     YT_DLP_AVAILABLE = False
 
+try:
+    import mutagen
+    MUTAGEN_AVAILABLE = True
+except ImportError:
+    MUTAGEN_AVAILABLE = False
 
-# ── Options avancées (partagées avec main.py) ─────────────────────────────────
+try:
+    import browser_cookie3
+    BROWSER_COOKIE3_AVAILABLE = True
+except ImportError:
+    BROWSER_COOKIE3_AVAILABLE = False
+
+# ── Config dir ────────────────────────────────────────────────────────────────
+CONFIG_DIR   = Path.home() / ".omnimedia"
+HISTORY_FILE = CONFIG_DIR / "history.json"
+
+# ── Supported browsers for auto cookie import ─────────────────────────────────
+SUPPORTED_BROWSERS = ["chrome", "firefox", "edge", "brave", "opera", "safari"]
+
+
+# ── Filename sanitisation ─────────────────────────────────────────────────────
+
+_FORBIDDEN = re.compile(r'[\\/:*?"<>|]')
+_WHITESPACE = re.compile(r'\s+')
+
+def sanitize_filename(name: str, max_length: int = 200) -> str:
+    """
+    Strip characters forbidden on Windows/macOS/Linux filesystems,
+    collapse runs of whitespace, and truncate to *max_length* chars.
+    Returns 'download' if the result would be empty.
+    """
+    name = _FORBIDDEN.sub("_", name)          # replace forbidden chars
+    name = _WHITESPACE.sub(" ", name).strip() # collapse whitespace
+    name = name[:max_length]                   # truncate
+    return name or "download"
+
+
+# ── Advanced options ──────────────────────────────────────────────────────────
 
 @dataclass
 class AdvancedOptions:
-    audio_bitrate:  str = "192k"   # "128k" | "192k" | "320k"
-    video_codec:    str = "h264"   # "h264" | "h265" | "vp9"
-    max_resolution: str = "best"   # "best" | "1080" | "720" | "480"
+    audio_bitrate:   str  = "192k"
+    video_codec:     str  = "h264"
+    max_resolution:  str  = "best"
+    playlist_items:  str  = ""
+    cookies_file:    str  = ""
+    browser_cookies: str  = ""    # browser name for auto-import
+    embed_thumbnail: bool = True  # embed album art for audio
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Download History ───────────────────────────────────────────────────────────
 
-def sanitize_url(url: str) -> str:
-    return url.strip()
+class DownloadHistory:
+    def __init__(self) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        self._entries: list[dict] = self._load()
 
+    def _load(self) -> list[dict]:
+        try:
+            return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return []
 
-def is_valid_url(url: str) -> bool:
-    pattern = re.compile(
-        r'^(https?://)'
-        r'([\w\-]+(\.[\w\-]+)+)'
-        r'(:\d+)?(/[^\s]*)?$',
-        re.IGNORECASE,
-    )
-    return bool(pattern.match(url))
+    def _save(self) -> None:
+        try:
+            HISTORY_FILE.write_text(
+                json.dumps(self._entries, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
+    def add(self, url: str, title: str, path: str, mode: str) -> None:
+        self._entries.insert(0, {
+            "url":   url,
+            "title": title,
+            "path":  path,
+            "mode":  mode,
+            "date":  datetime.now().isoformat(timespec="seconds"),
+        })
+        self._entries = self._entries[:200]
+        self._save()
 
-# ── Progress hook factory ─────────────────────────────────────────────────────
+    def all(self) -> list[dict]:
+        return list(self._entries)
 
-def make_progress_hook(
-    progress_cb: Callable[[int], None],
-    status_cb:   Callable[[str], None],
-) -> Callable:
-    """Return a yt-dlp progress hook that emits Qt signals."""
-
-    def hook(d: dict) -> None:
-        status = d.get("status", "")
-
-        if status == "downloading":
-            total      = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-            downloaded = d.get("downloaded_bytes", 0)
-            speed      = d.get("_speed_str", "").strip()
-            eta        = d.get("_eta_str", "").strip()
-
-            if total > 0:
-                pct = int(min(downloaded / total * 95, 95))
-                progress_cb(pct)
-
-            dl_str = d.get("_downloaded_bytes_str", "").strip()
-            info = f"⬇  {dl_str}" if dl_str else "⬇  Téléchargement…"
-            if speed and speed != "N/A":
-                info += f"  ·  {speed}"
-            if eta and eta != "N/A":
-                info += f"  ·  ETA {eta}"
-            status_cb(info)
-
-        elif status == "finished":
-            progress_cb(97)
-            status_cb("⚙  Post-traitement…")
-
-        elif status == "error":
-            status_cb("✗  Erreur pendant le téléchargement")
-
-    return hook
+    def clear(self) -> None:
+        self._entries = []
+        self._save()
 
 
-# ── Download Worker ───────────────────────────────────────────────────────────
+history = DownloadHistory()
+
+
+# ── Smart auto-tagger ─────────────────────────────────────────────────────────
+
+def _embed_id3_tags(filepath: Path, info: dict) -> None:
+    """
+    Embed ID3 tags (title, artist, album, year, genre) and cover art
+    into an MP3 file using mutagen. Falls back silently if unavailable.
+    """
+    if not MUTAGEN_AVAILABLE:
+        return
+    try:
+        from mutagen.id3 import (
+            ID3, TIT2, TPE1, TALB, TDRC, TCON, APIC, ID3NoHeaderError
+        )
+        try:
+            tags = ID3(str(filepath))
+        except ID3NoHeaderError:
+            tags = ID3()
+
+        title    = info.get("title", "")
+        uploader = info.get("uploader") or info.get("channel", "")
+        album    = info.get("album") or info.get("playlist_title", "")
+        year     = str(info.get("upload_date", ""))[:4]
+        genre    = info.get("genre", "")
+
+        if title:    tags["TIT2"] = TIT2(encoding=3, text=title)
+        if uploader: tags["TPE1"] = TPE1(encoding=3, text=uploader)
+        if album:    tags["TALB"] = TALB(encoding=3, text=album)
+        if year:     tags["TDRC"] = TDRC(encoding=3, text=year)
+        if genre:    tags["TCON"] = TCON(encoding=3, text=genre)
+
+        # Embed thumbnail if available
+        thumb_url = info.get("thumbnail") or ""
+        if thumb_url:
+            try:
+                with urllib.request.urlopen(thumb_url, timeout=8) as r:
+                    img_data = r.read()
+                mime = "image/jpeg" if thumb_url.lower().endswith(".jpg") else "image/png"
+                tags["APIC"] = APIC(
+                    encoding=3, mime=mime,
+                    type=3,          # Cover (front)
+                    desc="Cover",
+                    data=img_data,
+                )
+            except Exception:
+                pass  # thumbnail download is best-effort
+
+        tags.save(str(filepath), v2_version=3)
+    except Exception as exc:
+        print(f"[AutoTag] Could not embed tags: {exc}")
+
+
+# ── Download Worker ────────────────────────────────────────────────────────────
 
 class DownloadWorker(QThread):
-    """QThread qui télécharge une URL via yt-dlp."""
+    """
+    Background thread that handles a single download via yt-dlp.
+    Emits granular progress / status signals for UI binding.
+    """
 
-    progress  = pyqtSignal(int)
-    status    = pyqtSignal(str)
-    finished  = pyqtSignal(str)
-    error     = pyqtSignal(str)
+    progress    = pyqtSignal(int)           # 0-100
+    speed       = pyqtSignal(str)           # human-readable speed string
+    eta         = pyqtSignal(str)           # human-readable ETA string
+    status      = pyqtSignal(str, str)      # (message, level)  level ∈ ok|err|info|warn
+    finished    = pyqtSignal(bool, str)     # (success, output_path)
 
     def __init__(
         self,
-        url:        str,
-        output_dir: Path,
-        mode:       str = "video",
-        options:    AdvancedOptions | None = None,
+        url           : str,
+        output_dir    : str | Path,
+        mode          : str = "audio",          # "audio" | "video"
+        options       : AdvancedOptions | None = None,
+        playlist_mode : bool = False,            # create sub-folder per playlist
+        auto_tag      : bool = True,             # embed smart ID3 tags
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.url        = sanitize_url(url)
-        self.output_dir = Path(output_dir)
-        self.mode       = mode
-        self.options    = options or AdvancedOptions()
-        self._cancelled = False
+        self.url           = url.strip()
+        self.output_dir    = Path(output_dir)
+        self.mode          = mode
+        self.options       = options or AdvancedOptions()
+        self.playlist_mode = playlist_mode
+        self.auto_tag      = auto_tag
+        self._cancelled    = False
+        self._output_path  = ""
+
+    # ── Cancellation & cleanup ────────────────────────────────────────────────
 
     def cancel(self) -> None:
+        """Request cancellation. Triggers cleanup of .part files."""
         self._cancelled = True
 
-    def _build_format_selector(self) -> str:
-        if self.mode == "audio":
-            return "bestaudio/best"
-        res = self.options.max_resolution
-        if res == "best":
-            return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
-        return (
-            f"bestvideo[height<={res}][ext=mp4]+bestaudio[ext=m4a]"
-            f"/bestvideo[height<={res}]+bestaudio/best[height<={res}]/best"
-        )
+    def cleanup(self) -> None:
+        """Delete any leftover .part / .ytdl residue files in output_dir."""
+        try:
+            for f in self.output_dir.glob("*.part"):
+                f.unlink(missing_ok=True)
+            for f in self.output_dir.glob("*.ytdl"):
+                f.unlink(missing_ok=True)
+        except Exception as exc:
+            print(f"[DownloadWorker.cleanup] {exc}")
 
-    def _build_postprocessors(self) -> list[dict]:
+    # ── yt-dlp hooks ─────────────────────────────────────────────────────────
+
+    def _progress_hook(self, d: dict) -> None:
+        if self._cancelled:
+            raise Exception("Download cancelled by user")
+
+        status = d.get("status", "")
+        if status == "downloading":
+            pct_raw = d.get("_percent_str", "0%").strip().rstrip("%")
+            try:
+                self.progress.emit(int(float(pct_raw)))
+            except ValueError:
+                pass
+            self.speed.emit(d.get("_speed_str", "").strip())
+            self.eta.emit(d.get("_eta_str", "").strip())
+        elif status == "finished":
+            self._output_path = d.get("filename", "")
+            self.progress.emit(100)
+
+    def _build_ydl_opts(self) -> dict:
+        """Build the yt-dlp options dict from current settings."""
+        o = self.options
+
+        # Determine effective output directory (playlist sub-folder if requested)
+        out_dir = self.output_dir
+        if self.playlist_mode:
+            # %(playlist_title)s falls back to the video title when not a playlist
+            out_dir_template = str(out_dir / "%(playlist_title|NA)s" / "%(title)s.%(ext)s")
+        else:
+            out_dir_template = str(out_dir / "%(title)s.%(ext)s")
+
+        # Sanitise output template title component
+        # yt-dlp handles template substitution, but we guard the directory part
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build ffmpeg location: prefer user setting, then exe folder, then PATH
+        ffmpeg_loc = cfg.ffmpeg_path
+        if not ffmpeg_loc:
+            # Check alongside the frozen executable first
+            exe_dir = Path(getattr(os, "frozen_path", Path(__file__).parent))
+            candidate = exe_dir / "ffmpeg.exe"
+            if candidate.exists():
+                ffmpeg_loc = str(candidate)
+
+        opts: dict = {
+            "outtmpl"         : out_dir_template,
+            "progress_hooks"  : [self._progress_hook],
+            "noplaylist"      : not self.playlist_mode,
+            "quiet"           : True,
+            "no_warnings"     : True,
+            "restrictfilenames": True,   # yt-dlp built-in sanitisation
+        }
+
+        if ffmpeg_loc:
+            opts["ffmpeg_location"] = ffmpeg_loc
+
+        # Cookies
+        if o.cookies_file:
+            opts["cookiefile"] = o.cookies_file
+        elif o.browser_cookies and BROWSER_COOKIE3_AVAILABLE:
+            opts["cookiesfrombrowser"] = (o.browser_cookies,)
+
+        # Format selection
         if self.mode == "audio":
-            bitrate = self.options.audio_bitrate.replace("k", "")
-            return [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
-                     "preferredquality": bitrate}]
-        return []
+            opts["format"]           = "bestaudio/best"
+            opts["postprocessors"]   = [{
+                "key"            : "FFmpegExtractAudio",
+                "preferredcodec" : "mp3",
+                "preferredquality": o.audio_bitrate.rstrip("k"),
+            }]
+            if o.embed_thumbnail and MUTAGEN_AVAILABLE:
+                opts["writethumbnail"] = False   # we embed manually after download
+        else:
+            # Video
+            res_map = {
+                "best": "bestvideo+bestaudio/best",
+                "1080": "bestvideo[height<=1080]+bestaudio/best",
+                "720" : "bestvideo[height<=720]+bestaudio/best",
+                "480" : "bestvideo[height<=480]+bestaudio/best",
+                "360" : "bestvideo[height<=360]+bestaudio/best",
+            }
+            opts["format"] = res_map.get(o.max_resolution, "bestvideo+bestaudio/best")
+            opts["merge_output_format"] = "mp4"
+
+        return opts
+
+    # ── Thread entry point ────────────────────────────────────────────────────
 
     def run(self) -> None:
         if not YT_DLP_AVAILABLE:
-            self.error.emit("yt-dlp n'est pas installé.\nLancez : pip install yt-dlp")
+            self.finished.emit(False, "yt-dlp not installed")
             return
-
-        if not is_valid_url(self.url):
-            self.error.emit("URL invalide. Vérifiez le lien collé.")
-            return
-
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        output_template = str(self.output_dir / "%(title)s.%(ext)s")
-        downloaded_paths: list[str] = []
-
-        def on_progress(pct: int) -> None:
-            if not self._cancelled:
-                self.progress.emit(pct)
-
-        def on_status(msg: str) -> None:
-            if not self._cancelled:
-                self.status.emit(msg)
-
-        def pp_hook(d: dict) -> None:
-            if d.get("status") == "finished":
-                path = (
-                    d.get("info_dict", {}).get("filepath")
-                    or d.get("info_dict", {}).get("filename")
-                    or d.get("filename", "")
-                )
-                if path:
-                    downloaded_paths.append(str(path))
-
-        ydl_opts: dict = {
-            "format":         self._build_format_selector(),
-            "outtmpl":        output_template,
-            "postprocessors": self._build_postprocessors(),
-            # ── CORRECTIF CLÉ ────────────────────────────────────────────────
-            # quiet=True supprimait les hooks de progression dans certaines
-            # versions de yt-dlp. On utilise noprogress=True à la place :
-            # cela cache la barre texte en console SANS bloquer les hooks Python.
-            "quiet":          False,
-            "noprogress":     True,
-            "no_warnings":    True,
-            # ─────────────────────────────────────────────────────────────────
-            "progress_hooks":      [make_progress_hook(on_progress, on_status)],
-            "postprocessor_hooks": [pp_hook],
-        }
-
-        if self.mode == "video":
-            ydl_opts["merge_output_format"] = "mp4"
-
-        self.status.emit("🔍  Analyse de l'URL…")
-        self.progress.emit(2)
 
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # ── CORRECTIF PRINCIPAL ───────────────────────────────────────
-                # Ancien code : extract_info(download=False) puis download([url])
-                # → deux sessions yt-dlp indépendantes, hooks ignorés sur la 2e.
-                # Nouveau code : un seul appel extract_info(download=True).
-                info = ydl.extract_info(self.url, download=True)
-                # ─────────────────────────────────────────────────────────────
+            self.status.emit("Starting download…", "info")
+            opts    = self._build_ydl_opts()
+            info_dict: dict = {}
+
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info_dict = ydl.extract_info(self.url, download=True) or {}
 
             if self._cancelled:
+                self.cleanup()
+                self.finished.emit(False, "Cancelled")
                 return
 
-            # Résolution du chemin final
-            if downloaded_paths:
-                final_path = downloaded_paths[-1]
-            else:
-                ext = ".mp3" if self.mode == "audio" else ".mp4"
-                candidates = sorted(
-                    self.output_dir.glob(f"*{ext}"),
-                    key=os.path.getmtime, reverse=True,
-                )
-                if candidates:
-                    final_path = str(candidates[0])
-                else:
-                    all_files = sorted(
-                        [f for f in self.output_dir.iterdir() if f.is_file()],
-                        key=os.path.getmtime, reverse=True,
-                    )
-                    final_path = str(all_files[0]) if all_files else str(self.output_dir)
+            # Resolve actual output path
+            out_path = Path(self._output_path) if self._output_path else self.output_dir
 
-            self.progress.emit(100)
-            self.finished.emit(final_path)
+            # Sanitise any title-based filenames (belt-and-suspenders)
+            raw_title = info_dict.get("title", "")
+            if raw_title:
+                sanitize_filename(raw_title)   # validation only; yt-dlp already wrote the file
+
+            # Smart auto-tagging for MP3 output
+            if self.mode == "audio" and self.auto_tag and cfg.auto_tag:
+                mp3_path = out_path.with_suffix(".mp3") if out_path.suffix != ".mp3" else out_path
+                if mp3_path.exists():
+                    _embed_id3_tags(mp3_path, info_dict)
+
+            history.add(
+                url   = self.url,
+                title = sanitize_filename(info_dict.get("title", self.url)),
+                path  = str(out_path),
+                mode  = self.mode,
+            )
+
+            self.status.emit("Download complete", "ok")
+            self.finished.emit(True, str(out_path))
 
         except Exception as exc:
-            if not self._cancelled:
-                msg = str(exc)
-                if "HTTP Error 403" in msg:
-                    msg = "Accès refusé (403). Mettez yt-dlp à jour :\npip install -U yt-dlp"
-                elif "Video unavailable" in msg:
-                    msg = "Vidéo indisponible ou privée."
-                self.error.emit(msg)
+            msg = str(exc)
+            if self._cancelled:
+                self.cleanup()
+                self.finished.emit(False, "Cancelled")
+            else:
+                self.status.emit(f"Error: {msg}", "err")
+                self.finished.emit(False, msg)
+
+
+# ── Queue item ────────────────────────────────────────────────────────────────
+
+@dataclass
+class QueueItem:
+    """Represents a single entry in the download queue."""
+    url    : str
+    mode   : str            # "audio" | "video"
+    status : str = "pending"   # "pending" | "downloading" | "done" | "error" | "cancelled"
+    title  : str = ""
+    worker : DownloadWorker | None = field(default=None, repr=False)
+
+
+# ── yt-dlp update worker ──────────────────────────────────────────────────────
+
+class YtdlpUpdateWorker(QThread):
+    finished = pyqtSignal(bool, str)
+
+    def run(self) -> None:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["pip", "install", "--upgrade", "yt-dlp"],
+                capture_output=True, text=True, timeout=120,
+            )
+            ok  = result.returncode == 0
+            msg = "yt-dlp updated successfully" if ok else result.stderr.strip()[:200]
+            self.finished.emit(ok, msg)
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
+
+
+# ── GitHub version checker ────────────────────────────────────────────────────
+
+class VersionChecker(QThread):
+    update_available = pyqtSignal(str)
+    up_to_date       = pyqtSignal()
+
+    def __init__(self, current_version: str, parent=None) -> None:
+        super().__init__(parent)
+        self._current = current_version
+
+    def run(self) -> None:
+        try:
+            url = "https://api.github.com/repos/SanoBld/OmniMedia/releases/latest"
+            with urllib.request.urlopen(url, timeout=6) as r:
+                data    = json.loads(r.read())
+                latest  = data.get("tag_name", "").lstrip("v")
+                if latest and latest != self._current:
+                    self.update_available.emit(latest)
+                else:
+                    self.up_to_date.emit()
+        except Exception:
+            self.up_to_date.emit()
+
+
+# ── Browser cookie worker ─────────────────────────────────────────────────────
+
+class BrowserCookieWorker(QThread):
+    finished = pyqtSignal(bool, str)   # (success, cookies_file_path | error_msg)
+
+    def __init__(self, browser: str, parent=None) -> None:
+        super().__init__(parent)
+        self.browser = browser
+
+    def run(self) -> None:
+        if not BROWSER_COOKIE3_AVAILABLE:
+            self.finished.emit(False, "browser-cookie3 not installed")
+            return
+        try:
+            getter = getattr(browser_cookie3, self.browser, None)
+            if getter is None:
+                self.finished.emit(False, f"Browser '{self.browser}' not supported")
+                return
+            cookies    = getter()
+            tmp        = tempfile.NamedTemporaryFile(
+                suffix=".txt", delete=False, mode="w", encoding="utf-8"
+            )
+            # Write Netscape cookie format
+            tmp.write("# Netscape HTTP Cookie File\n")
+            for c in cookies:
+                tmp.write(
+                    f"{c.domain}\tTRUE\t{c.path}\t"
+                    f"{'TRUE' if c.secure else 'FALSE'}\t"
+                    f"{int(c.expires) if c.expires else 0}\t"
+                    f"{c.name}\t{c.value}\n"
+                )
+            tmp.close()
+            self.finished.emit(True, tmp.name)
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
