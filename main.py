@@ -35,7 +35,7 @@ def _check_dependencies() -> None:
 _check_dependencies()
 # ─────────────────────────────────────────────────────────────────────────────
 
-from PyQt6.QtCore    import Qt, QTimer, QSize
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui     import QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
