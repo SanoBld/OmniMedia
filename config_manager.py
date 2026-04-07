@@ -52,7 +52,7 @@ _DEFAULTS: dict[str, Any] = {
     "auto_tag"           : True,
     "playlist_mode"      : False,
     "compress_target"    : "",
-    "minimize_to_tray"   : True,          # close → tray instead of quit
+    "minimize_to_tray"   : False,         # close → tray instead of quit
     "start_in_tray"      : False,         # start minimized to tray
 }
 
