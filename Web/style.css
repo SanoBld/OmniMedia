@@ -1,0 +1,405 @@
+/* reset — nobody wants browser default margins screwing things up */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* dark background, not quite black */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #111827;
+    color: #d1d5db;
+    min-height: 100vh;
+    padding: 24px 16px;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+h1 {
+    font-size: 26px;
+    font-weight: 700;
+    color: #f9fafb;
+    margin-bottom: 6px;
+}
+
+h3 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7280;
+    margin: 22px 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #1f2937;
+}
+
+.subtitle {
+    color: #6b7280;
+    font-size: 13px;
+    margin-bottom: 22px;
+}
+
+/* ---- TABS ---- */
+.tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 18px;
+}
+
+.tab {
+    padding: 7px 16px;
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 6px;
+    color: #9ca3af;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 0.1s, color 0.1s;
+}
+
+.tab:hover {
+    background: #263244;
+    color: #e5e7eb;
+}
+
+.tab.active {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: #fff;
+}
+
+/* ---- TAB CONTENT PANELS ---- */
+.tab-content {
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 8px;
+    padding: 20px;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ---- INFO NOTE ---- */
+.info-note {
+    background: #1e3a5f;
+    border-left: 3px solid #3b82f6;
+    border-radius: 0 5px 5px 0;
+    padding: 9px 12px;
+    font-size: 12px;
+    color: #93c5fd;
+    margin-bottom: 18px;
+    line-height: 1.6;
+}
+
+.info-note a {
+    color: #60a5fa;
+}
+
+.info-note a:hover {
+    color: #93c5fd;
+}
+
+/* ---- FORM ---- */
+.form-group {
+    margin-bottom: 13px;
+}
+
+.form-group.full-width {
+    grid-column: 1 / -1;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 13px;
+}
+
+label {
+    display: block;
+    font-size: 12px;
+    color: #9ca3af;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+/* checkboxes inside label */
+label input[type="checkbox"] {
+    cursor: pointer;
+    accent-color: #3b82f6;
+}
+
+.hint-inline {
+    font-size: 11px;
+    color: #4b5563;
+    font-weight: 400;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+    width: 100%;
+    padding: 7px 10px;
+    background: #111827;
+    border: 1px solid #374151;
+    border-radius: 5px;
+    color: #e5e7eb;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+    appearance: auto;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+select:focus {
+    border-color: #3b82f6;
+}
+
+input[type="range"] {
+    width: 100%;
+    accent-color: #3b82f6;
+    margin-top: 5px;
+    cursor: pointer;
+}
+
+.range-ends {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #4b5563;
+    margin-top: 3px;
+}
+
+/* bitrate input + unit label side by side */
+.input-unit {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.input-unit input {
+    flex: 1;
+}
+
+.input-unit span {
+    font-size: 12px;
+    color: #6b7280;
+    white-space: nowrap;
+    min-width: 28px;
+}
+
+/* ---- BUTTONS ---- */
+.btn-primary {
+    padding: 9px 20px;
+    background: #3b82f6;
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.05s;
+    margin-top: 6px;
+}
+
+.btn-primary:hover {
+    background: #2563eb;
+}
+
+.btn-primary:active {
+    transform: scale(0.97);
+}
+
+.btn-secondary {
+    padding: 9px 18px;
+    background: transparent;
+    border: 1px solid #374151;
+    border-radius: 6px;
+    color: #9ca3af;
+    font-size: 13px;
+    cursor: pointer;
+    margin-top: 6px;
+    margin-left: 8px;
+    transition: background 0.1s;
+}
+
+.btn-secondary:hover {
+    background: #1f2937;
+    color: #e5e7eb;
+}
+
+.convert-actions {
+    margin-top: 18px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0;
+}
+
+/* ---- STATUS MESSAGES ---- */
+.status {
+    margin-top: 13px;
+    padding: 10px 13px;
+    border-radius: 5px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.status.info {
+    background: #1e3a5f;
+    color: #93c5fd;
+    border: 1px solid #2563eb;
+}
+
+.status.success {
+    background: #14532d;
+    color: #86efac;
+    border: 1px solid #166534;
+}
+
+.status.error {
+    background: #450a0a;
+    color: #fca5a5;
+    border: 1px solid #7f1d1d;
+}
+
+/* ---- DROP ZONE ---- */
+.drop-zone {
+    border: 2px dashed #374151;
+    border-radius: 8px;
+    padding: 36px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-bottom: 20px;
+    user-select: none;
+}
+
+.drop-zone:hover {
+    border-color: #3b82f6;
+    background: #1a2840;
+}
+
+.drop-zone.drag-over {
+    border-color: #60a5fa;
+    background: #1e3a5f;
+}
+
+.drop-icon {
+    font-size: 38px;
+    margin-bottom: 10px;
+}
+
+.drop-zone p {
+    color: #9ca3af;
+    font-size: 14px;
+    margin-bottom: 5px;
+}
+
+.drop-zone .hint {
+    font-size: 12px;
+    color: #4b5563;
+    line-height: 1.7;
+}
+
+/* ---- FILE INFO ---- */
+.file-info {
+    background: #111827;
+    border: 1px solid #374151;
+    border-radius: 5px;
+    padding: 9px 13px;
+    font-size: 12px;
+    color: #9ca3af;
+    margin-bottom: 16px;
+    word-break: break-all;
+}
+
+/* ---- PROGRESS BAR ---- */
+#progress-wrap {
+    margin-top: 16px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #374151;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+#progress-fill {
+    height: 100%;
+    width: 0%;
+    background: #3b82f6;
+    border-radius: 4px;
+    transition: width 0.4s ease;
+}
+
+#progress-fill.done {
+    background: #22c55e;
+}
+
+#progress-fill.error {
+    background: #ef4444;
+}
+
+#progress-text {
+    font-size: 12px;
+    color: #9ca3af;
+    margin-top: 8px;
+}
+
+#progress-hint {
+    font-size: 11px;
+    color: #4b5563;
+    margin-top: 4px;
+}
+
+/* ---- RESULT BOX ---- */
+.result-box {
+    background: #14532d;
+    border: 1px solid #166534;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-top: 14px;
+}
+
+.result-box p {
+    font-size: 13px;
+    color: #86efac;
+    margin-bottom: 10px;
+}
+
+.result-box a.btn-primary {
+    display: inline-block;
+    text-decoration: none;
+    margin-top: 0;
+}
+
+/* ---- RESPONSIVE ---- */
+@media (max-width: 560px) {
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    body {
+        padding: 14px 10px;
+    }
+
+    h1 {
+        font-size: 22px;
+    }
+
+    .tab {
+        padding: 6px 12px;
+        font-size: 12px;
+    }
+}

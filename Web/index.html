@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaTools — Télécharger, Convertir, Compresser</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+    <h1>MediaTools</h1>
+    <p class="subtitle">Téléchargeur + convertisseur + compresseur — tout se passe dans le navigateur, rien n'est uploadé</p>
+
+    <div class="tabs">
+        <button class="tab active" onclick="switchTab('download', this)">&#8595; Télécharger</button>
+        <button class="tab" onclick="switchTab('convert', this)">&#8644; Convertir</button>
+        <button class="tab" onclick="switchTab('compress', this)">&#8681; Compresser</button>
+    </div>
+
+    <!-- ======== TÉLÉCHARGER TAB ======== -->
+    <div id="tab-download" class="tab-content">
+
+        <div class="info-note">
+            Utilise <a href="https://cobalt.tools" target="_blank">cobalt.tools</a> — open source, sans pub, sans compte.
+            En cas d'échec, cliquez sur "Ouvrir dans Cobalt" ou réessayez après quelques secondes.
+        </div>
+
+        <div class="form-group">
+            <label for="yt-url">URL vidéo (YouTube, Twitter/X, TikTok, Reddit, Vimeo...)</label>
+            <input type="text" id="yt-url" placeholder="https://www.youtube.com/watch?v=..." />
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="yt-mode">Mode de téléchargement</label>
+                <select id="yt-mode">
+                    <option value="auto">Vidéo + Audio</option>
+                    <option value="audio">Audio seulement</option>
+                    <option value="mute">Vidéo seulement (sans audio)</option>
+                </select>
+            </div>
+            <div class="form-group" id="yt-vq-wrap">
+                <label for="yt-vq">Qualité vidéo (max)</label>
+                <select id="yt-vq">
+                    <option value="2160">4K — 2160p</option>
+                    <option value="1440">2K — 1440p</option>
+                    <option value="1080" selected>Full HD — 1080p</option>
+                    <option value="720">HD — 720p</option>
+                    <option value="480">480p</option>
+                    <option value="360">360p</option>
+                    <option value="240">240p</option>
+                    <option value="144">144p</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="yt-af">Format audio</label>
+                <select id="yt-af">
+                    <option value="mp3">MP3</option>
+                    <option value="ogg">OGG (Vorbis)</option>
+                    <option value="wav">WAV — lossless, fichiers lourds</option>
+                    <option value="opus">Opus — excellent rapport qualité/taille</option>
+                    <option value="flac">FLAC — lossless compressé</option>
+                    <option value="best">Meilleur disponible</option>
+                </select>
+            </div>
+            <div class="form-group" id="yt-ab-wrap">
+                <label for="yt-ab">Bitrate audio</label>
+                <select id="yt-ab">
+                    <option value="320">320 kbps — maximum</option>
+                    <option value="256">256 kbps</option>
+                    <option value="192">192 kbps</option>
+                    <option value="128" selected>128 kbps — défaut</option>
+                    <option value="96">96 kbps</option>
+                    <option value="64">64 kbps</option>
+                    <option value="32">32 kbps — voix</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group" id="yt-vc-wrap">
+                <label for="yt-vcodec">Codec vidéo préféré</label>
+                <select id="yt-vcodec">
+                    <option value="h264">H.264 — compatible partout</option>
+                    <option value="av1">AV1 — fichiers plus petits</option>
+                    <option value="vp9">VP9 — open source</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="yt-filename">Style de nom de fichier</label>
+                <select id="yt-filename">
+                    <option value="pretty">Pretty (titre + auteur)</option>
+                    <option value="basic">Basic (titre seulement)</option>
+                    <option value="classic">Classic (défaut du site)</option>
+                    <option value="nerdy">Nerdy (avec infos codec)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="yt-mute-audio" />
+                &nbsp;Supprimer l'audio de la vidéo
+            </label>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
+            <button class="btn-primary" onclick="ytDownload()">Télécharger</button>
+            <button class="btn-secondary" onclick="ytOpenInCobalt()">Ouvrir dans Cobalt &#8599;</button>
+        </div>
+
+        <div id="yt-status" class="status hidden"></div>
+
+    </div>
+
+    <!-- ======== CONVERTIR TAB ======== -->
+    <div id="tab-convert" class="tab-content hidden">
+
+        <div class="info-note">
+            Propulsé par <strong>FFmpeg.wasm</strong> — la conversion s'effectue entièrement dans le navigateur, rien n'est uploadé.
+            Premier chargement : ~25 Mo (10–30 secondes). Fichiers &gt;500 Mo peuvent être lents.
+        </div>
+
+        <div class="drop-zone" id="convert-drop-zone" onclick="document.getElementById('convert-file-input').click()">
+            <div class="drop-icon">&#128193;</div>
+            <p>Cliquez ici ou déposez un fichier</p>
+            <p class="hint">
+                Vidéo : mp4, mkv, avi, mov, webm, flv, wmv, ts, m2ts<br>
+                Audio : mp3, aac, m4a, flac, wav, ogg, opus, wma, aiff
+            </p>
+            <input type="file" id="convert-file-input" hidden
+                accept="video/*,audio/*,.mkv,.flac,.opus,.wma,.ts,.flv,.m2ts,.aiff" />
+        </div>
+
+        <div id="convert-file-settings" class="hidden">
+
+            <div class="file-info" id="convert-file-info"></div>
+
+            <div class="form-group">
+                <label for="out-format">Format de sortie</label>
+                <select id="out-format"></select>
+            </div>
+
+            <div id="video-section">
+                <h3>Vidéo</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="v-codec">Codec vidéo</label>
+                        <select id="v-codec" onchange="onVCodecChange()">
+                            <option value="libx264">H.264 (libx264) — meilleure compatibilité</option>
+                            <option value="libx265">H.265 / HEVC — fichiers plus petits</option>
+                            <option value="libvpx-vp9">VP9 — open source</option>
+                            <option value="copy">Copier le flux — sans ré-encodage (rapide)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="preset-wrap">
+                        <label for="v-preset">Vitesse d'encodage</label>
+                        <select id="v-preset">
+                            <option value="ultrafast">Ultrafast — gros fichier, encodage rapide</option>
+                            <option value="superfast">Superfast</option>
+                            <option value="veryfast">Very fast</option>
+                            <option value="faster">Faster</option>
+                            <option value="fast">Fast</option>
+                            <option value="medium" selected>Medium — bon équilibre</option>
+                            <option value="slow">Slow — meilleure compression</option>
+                            <option value="slower">Slower</option>
+                            <option value="veryslow">Very slow — compression maximale</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group full-width" id="crf-wrap">
+                    <label>
+                        Qualité — CRF : <strong id="crf-display">23</strong>
+                        <span class="hint-inline">(0 = lossless, 51 = pire — H.264 défaut : 23, H.265 : 28)</span>
+                    </label>
+                    <input type="range" id="v-crf" min="0" max="51" value="23" step="1"
+                        oninput="document.getElementById('crf-display').textContent = this.value" />
+                    <div class="range-ends">
+                        <span>0 (lossless, énorme)</span>
+                        <span>51 (inutilisable)</span>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Bitrate vidéo <span class="hint-inline">0 = utiliser le CRF</span></label>
+                        <div class="input-unit">
+                            <input type="number" id="v-bitrate" min="0" max="100000" value="0" placeholder="0" />
+                            <span>kbps</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Bitrate max <span class="hint-inline">0 = sans limite</span></label>
+                        <div class="input-unit">
+                            <input type="number" id="v-maxrate" min="0" max="100000" value="0" placeholder="0" />
+                            <span>kbps</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="v-res">Résolution</label>
+                        <select id="v-res">
+                            <option value="">Garder l'original</option>
+                            <option value="3840:2160">4K — 3840x2160</option>
+                            <option value="2560:1440">2K — 2560x1440</option>
+                            <option value="1920:1080">1080p — 1920x1080</option>
+                            <option value="1280:720">720p — 1280x720</option>
+                            <option value="854:480">480p — 854x480</option>
+                            <option value="640:360">360p — 640x360</option>
+                            <option value="426:240">240p — 426x240</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="v-fps">Framerate</label>
+                        <select id="v-fps">
+                            <option value="">Garder l'original</option>
+                            <option value="60">60 fps</option>
+                            <option value="30">30 fps</option>
+                            <option value="25">25 fps (PAL)</option>
+                            <option value="24">24 fps (cinéma)</option>
+                            <option value="15">15 fps</option>
+                            <option value="10">10 fps</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="v-pixel">Format de pixel</label>
+                        <select id="v-pixel">
+                            <option value="yuv420p">yuv420p — 8-bit, compatibilité max</option>
+                            <option value="yuv422p">yuv422p — 8-bit</option>
+                            <option value="yuv444p">yuv444p — 8-bit, pas de sous-échantillonnage</option>
+                            <option value="yuv420p10le">yuv420p10le — 10-bit (H.265/VP9)</option>
+                            <option value="">Défaut (laisser ffmpeg choisir)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="v-strip-audio">Audio en sortie</label>
+                        <select id="v-strip-audio">
+                            <option value="keep">Garder l'audio</option>
+                            <option value="strip">Supprimer l'audio (vidéo seule)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="v-deinterlace" />
+                        &nbsp;Désentrelacer (filtre yadif — enregistrements TV/broadcast)
+                    </label>
+                </div>
+            </div>
+
+            <div id="audio-section">
+                <h3>Audio</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="a-codec">Codec audio</label>
+                        <select id="a-codec" onchange="onACodecChange()">
+                            <option value="libmp3lame">MP3 (libmp3lame)</option>
+                            <option value="aac">AAC</option>
+                            <option value="libvorbis">Vorbis — pour fichiers OGG</option>
+                            <option value="libopus">Opus — meilleur rapport qualité/taille</option>
+                            <option value="flac">FLAC — lossless</option>
+                            <option value="pcm_s16le">PCM 16-bit — WAV non compressé</option>
+                            <option value="pcm_s24le">PCM 24-bit — WAV haute qualité</option>
+                            <option value="pcm_s32le">PCM 32-bit — WAV studio</option>
+                            <option value="copy">Copier le flux — sans ré-encodage</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="a-bitrate-wrap">
+                        <label for="a-bitrate">Bitrate audio</label>
+                        <select id="a-bitrate">
+                            <option value="320k">320 kbps — maximum</option>
+                            <option value="256k">256 kbps</option>
+                            <option value="192k">192 kbps</option>
+                            <option value="128k" selected>128 kbps — défaut</option>
+                            <option value="96k">96 kbps</option>
+                            <option value="64k">64 kbps</option>
+                            <option value="48k">48 kbps</option>
+                            <option value="32k">32 kbps — voix</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="a-samplerate">Fréquence d'échantillonnage</label>
+                        <select id="a-samplerate">
+                            <option value="">Garder l'original</option>
+                            <option value="96000">96000 Hz — studio</option>
+                            <option value="48000">48000 Hz — standard vidéo</option>
+                            <option value="44100">44100 Hz — qualité CD</option>
+                            <option value="22050">22050 Hz</option>
+                            <option value="16000">16000 Hz — voix</option>
+                            <option value="8000">8000 Hz — minimum</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="a-channels">Canaux</label>
+                        <select id="a-channels">
+                            <option value="">Garder l'original</option>
+                            <option value="2">Stéréo (2 canaux)</option>
+                            <option value="1">Mono (1 canal)</option>
+                            <option value="6">5.1 Surround (6 canaux)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group full-width">
+                    <label>
+                        Volume : <strong id="vol-display">100</strong>%
+                        <span class="hint-inline">(100 = inchangé, 200 = double)</span>
+                    </label>
+                    <input type="range" id="a-volume" min="0" max="400" value="100" step="1"
+                        oninput="document.getElementById('vol-display').textContent = this.value" />
+                    <div class="range-ends"><span>0% (silence)</span><span>400%</span></div>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="a-normalize" />
+                        &nbsp;Normaliser l'audio (loudnorm — cible -14 LUFS)
+                    </label>
+                </div>
+            </div>
+
+            <div id="trim-section">
+                <h3>Découpe (optionnel)</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="trim-start">Début</label>
+                        <input type="text" id="trim-start" placeholder="00:00:00 ou laisser vide" />
+                    </div>
+                    <div class="form-group">
+                        <label for="trim-end">Fin</label>
+                        <input type="text" id="trim-end" placeholder="00:01:30 ou laisser vide" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="convert-actions">
+                <button class="btn-primary" onclick="startConvert()">Convertir</button>
+                <button class="btn-secondary" onclick="resetConvertFile()">&#8635; Changer de fichier</button>
+            </div>
+
+            <div id="convert-progress-wrap" class="hidden">
+                <div class="progress-bar"><div id="convert-progress-fill"></div></div>
+                <p id="convert-progress-text">Initialisation...</p>
+                <p class="hint" id="convert-progress-hint"></p>
+            </div>
+            <div id="convert-result" class="hidden"></div>
+
+        </div>
+    </div>
+
+    <!-- ======== COMPRESSER TAB ======== -->
+    <div id="tab-compress" class="tab-content hidden">
+
+        <div class="info-note">
+            Réduit le poids d'un fichier vidéo ou audio via FFmpeg.wasm — tout se passe dans le navigateur.
+            Premier chargement : ~25 Mo (10–30 secondes).
+        </div>
+
+        <div class="drop-zone" id="compress-drop-zone" onclick="document.getElementById('compress-file-input').click()">
+            <div class="drop-icon">&#128193;</div>
+            <p>Cliquez ici ou déposez un fichier</p>
+            <p class="hint">
+                Vidéo : mp4, mkv, avi, mov, webm, flv, wmv, ts, m2ts<br>
+                Audio : mp3, aac, m4a, flac, wav, ogg, opus, wma, aiff
+            </p>
+            <input type="file" id="compress-file-input" hidden
+                accept="video/*,audio/*,.mkv,.flac,.opus,.wma,.ts,.flv,.m2ts,.aiff" />
+        </div>
+
+        <div id="compress-settings" class="hidden">
+
+            <div class="file-info" id="compress-file-info"></div>
+
+            <div id="compress-video-section">
+                <div class="form-group">
+                    <label for="compress-preset">Niveau de compression vidéo</label>
+                    <select id="compress-preset" onchange="onCompressPresetChange()">
+                        <option value="light">Légère — CRF 20, haute qualité, gain modéré</option>
+                        <option value="medium" selected>Moyenne — CRF 26, bon équilibre</option>
+                        <option value="heavy">Forte — CRF 32, gain important, qualité réduite</option>
+                        <option value="custom">Personnalisée (CRF manuel)</option>
+                    </select>
+                </div>
+                <div id="compress-crf-wrap" class="form-group hidden">
+                    <label>
+                        CRF : <strong id="compress-crf-display">26</strong>
+                        <span class="hint-inline">(18 = très haute qualité &nbsp;·&nbsp; 40 = compression max)</span>
+                    </label>
+                    <input type="range" id="compress-crf" min="18" max="40" value="26" step="1"
+                        oninput="document.getElementById('compress-crf-display').textContent = this.value" />
+                    <div class="range-ends"><span>18 — qualité max</span><span>40 — taille min</span></div>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="compress-format">Format de sortie</label>
+                    <select id="compress-format"></select>
+                </div>
+                <div class="form-group">
+                    <label for="compress-audio-br">Qualité audio</label>
+                    <select id="compress-audio-br">
+                        <option value="copy">Copier l'audio (inchangé)</option>
+                        <option value="192k">192 kbps</option>
+                        <option value="128k" selected>128 kbps</option>
+                        <option value="96k">96 kbps</option>
+                        <option value="64k">64 kbps</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="convert-actions">
+                <button class="btn-primary" onclick="startCompress()">Compresser</button>
+                <button class="btn-secondary" onclick="resetCompressFile()">&#8635; Changer de fichier</button>
+            </div>
+
+            <div id="compress-progress-wrap" class="hidden">
+                <div class="progress-bar"><div id="compress-progress-fill"></div></div>
+                <p id="compress-progress-text">Initialisation...</p>
+                <p class="hint" id="compress-progress-hint"></p>
+            </div>
+            <div id="compress-result" class="hidden"></div>
+
+        </div>
+    </div>
+
+</div>
+
+<!-- ffmpeg 0.11.x — pas besoin de SharedArrayBuffer ni de coi-serviceworker -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+<script src="script.js"></script>
+
+</body>
+</html>
