@@ -440,7 +440,19 @@
 
 </div>
 
-<!-- ffmpeg 0.11.x — pas besoin de SharedArrayBuffer ni de coi-serviceworker -->
+<!--
+    coi-serviceworker.js doit être le PREMIER script chargé.
+    Il ajoute les en-têtes COOP/COEP nécessaires sur GitHub Pages
+    pour activer SharedArrayBuffer (requis par ffmpeg-core sur certains navigateurs/hosts).
+    En développement local (http://localhost), ces en-têtes sont déjà présents
+    et le service worker s'activera sans rechargement supplémentaire.
+-->
+<script src="coi-serviceworker.js"></script>
+
+<!--
+    ffmpeg.wasm 0.11.x (UMD build) — expose FFmpeg.createFFmpeg et FFmpeg.fetchFile
+    en tant que globaux. L'API 0.12.x est complètement différente, ne pas confondre.
+-->
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 <script src="script.js"></script>
 

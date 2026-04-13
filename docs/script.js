@@ -18,19 +18,56 @@ function switchTab(name, btn) {
 //  TÉLÉCHARGER — cobalt API
 // =====================================================================
 
-// Official cobalt API + community instances
-// Tried in order: direct first, then via CORS proxy as last resort
-// cobalt v10+ API: POST to root URL (no /api suffix)
-const COBALT_INSTANCES = [
-    'https://api.cobalt.tools',
+// FIX: api.cobalt.tools exige une clé Bearer depuis fin 2024 — supprimé.
+// On récupère dynamiquement la liste des instances depuis instances.cobalt.best,
+// puis on tente chaque instance avec CORS activé dans l'ordre.
+// En dernier recours, on passe par un proxy CORS.
+
+// URL de l'API de registre des instances cobalt (liste communautaire, mise à jour régulièrement)
+const COBALT_INSTANCES_REGISTRY = 'https://instances.cobalt.best/api/instances.json';
+
+// Instances de secours codées en dur (sans api.cobalt.tools qui nécessite une clé API)
+const COBALT_FALLBACK_INSTANCES = [
     'https://cobalt.imput.net',
-    'https://cob.freetards.xyz',
+    'https://co.wuk.sh',
     'https://cobalt.synzr.space',
+    'https://cob.freetards.xyz',
 ];
 
-// Public CORS proxy used as fallback when direct calls fail (e.g. local file:// testing)
-// corsproxy.io wraps the request server-side and forwards it
+// Proxy CORS de dernier recours (utilisé si toutes les instances directes échouent)
 const CORS_PROXY = 'https://corsproxy.io/?url=';
+
+// Cache des instances récupérées dynamiquement (évite de refaire la requête à chaque téléchargement)
+let _cobaltInstancesCache = null;
+
+async function getCobaltInstances() {
+    if (_cobaltInstancesCache) return _cobaltInstancesCache;
+
+    try {
+        const res = await fetch(COBALT_INSTANCES_REGISTRY, {
+            signal: AbortSignal.timeout(6000),
+        });
+        if (!res.ok) throw new Error(`registry HTTP ${res.status}`);
+        const data = await res.json();
+
+        // Garder les instances avec CORS activé et score > 75, limité à 6
+        const live = Array.isArray(data)
+            ? data
+                .filter(i => i.cors === 1 && (i.score == null || i.score > 75) && i.api)
+                .sort((a, b) => (b.score || 0) - (a.score || 0))
+                .map(i => i.api.replace(/\/$/, ''))
+                .slice(0, 6)
+            : [];
+
+        _cobaltInstancesCache = live.length > 0 ? live : COBALT_FALLBACK_INSTANCES;
+        console.log('[cobalt] instances récupérées :', _cobaltInstancesCache);
+    } catch (err) {
+        console.warn('[cobalt] impossible de récupérer la liste des instances :', err.message);
+        _cobaltInstancesCache = COBALT_FALLBACK_INSTANCES;
+    }
+
+    return _cobaltInstancesCache;
+}
 
 document.getElementById('yt-mode').addEventListener('change', function () {
     const audioOnly = this.value === 'audio';
@@ -68,80 +105,100 @@ async function ytDownload() {
         })(),
     };
 
-    showStatus('yt-status', 'info', 'Contacting cobalt API...');
+    showStatus('yt-status', 'info', '🔍 Récupération de la liste des instances cobalt...');
 
-    // Step 1: try all instances directly
+    // Récupère la liste d'instances (depuis le registre ou le cache)
+    const instances = await getCobaltInstances();
+
+    // Étape 1 : essai direct sur chaque instance dans l'ordre
     let lastError = null;
-    for (let i = 0; i < COBALT_INSTANCES.length; i++) {
-        const instance = COBALT_INSTANCES[i];
-        if (i > 0) showStatus('yt-status', 'info', `Instance ${i} indisponible, essai de ${instance}...`);
+    for (let i = 0; i < instances.length; i++) {
+        const instance = instances[i];
+        showStatus('yt-status', 'info', `⏳ Tentative sur ${instance}...`);
         try {
             const ok = await tryCobaltInstance(instance, payload);
             if (ok) return;
         } catch (err) {
             lastError = err;
-            console.warn(`cobalt [${instance}] failed:`, err.message);
+            console.warn(`[cobalt] ${instance} → échec :`, err.message);
         }
     }
 
-    // Step 2: retry first instance through CORS proxy (works from file:// or blocked origins)
-    showStatus('yt-status', 'info', 'Échec direct, essai via proxy CORS...');
+    // Étape 2 : tentative via proxy CORS sur la première instance de secours
+    showStatus('yt-status', 'info', '🔄 Toutes les instances ont échoué, tentative via proxy CORS...');
     try {
-        const proxied = CORS_PROXY + encodeURIComponent(COBALT_INSTANCES[0]);
+        const proxied = CORS_PROXY + encodeURIComponent(COBALT_FALLBACK_INSTANCES[0]);
         const ok = await tryCobaltInstance(proxied, payload);
         if (ok) return;
     } catch (err) {
         lastError = err;
-        console.warn('cobalt proxy failed:', err.message);
+        console.warn('[cobalt] proxy CORS → échec :', err.message);
     }
 
     showStatus('yt-status', 'error',
-        `Téléchargement échoué : ${lastError ? lastError.message : 'toutes les instances ont échoué'}\n\n` +
-        `Utilisez "Ouvrir dans Cobalt" pour accéder directement au site.`
+        `❌ Téléchargement impossible : ${lastError ? lastError.message : 'toutes les instances ont échoué'}\n\n` +
+        `→ Utilisez "Ouvrir dans Cobalt" pour télécharger directement depuis le site.\n` +
+        `→ Consultez la console (F12) pour le détail des erreurs.`
     );
 }
 
 async function tryCobaltInstance(instanceUrl, payload) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     let res;
     try {
         res = await fetch(instanceUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            },
             body: JSON.stringify(payload),
             signal: controller.signal,
         });
+    } catch (err) {
+        // Distingue timeout (AbortError) des erreurs réseau (CORS, DNS, etc.)
+        if (err.name === 'AbortError') throw new Error('timeout (>15s)');
+        throw new Error(`réseau : ${err.message} — probablement un blocage CORS sur cette instance`);
     } finally {
-        clearTimeout(timeout);
+        clearTimeout(timeoutId);
     }
 
     if (!res.ok) {
         let errText = `HTTP ${res.status}`;
-        try { const j = await res.json(); errText += ': ' + (j?.error?.code || JSON.stringify(j)); } catch (_) {}
+        try {
+            const j = await res.json();
+            // cobalt v10 : { status: "error", error: { code: "..." } }
+            errText += ' : ' + (j?.error?.code || j?.text || JSON.stringify(j));
+        } catch (_) { /* la réponse n'était pas du JSON */ }
         throw new Error(errText);
     }
 
     const data = await res.json();
-    console.log(`cobalt [${instanceUrl}] →`, data);
+    console.log(`[cobalt] ${instanceUrl} →`, data);
 
-    if (data.status === 'error') throw new Error(`cobalt error: ${data.error?.code || 'unknown'}`);
+    // cobalt v10 : status peut être "error", "redirect", "tunnel", "stream", "picker"
+    if (data.status === 'error') {
+        throw new Error(`cobalt error : ${data.error?.code || JSON.stringify(data.error) || 'unknown'}`);
+    }
 
     if (['redirect', 'tunnel', 'stream'].includes(data.status)) {
         const fname = data.filename || 'download';
-        showStatus('yt-status', 'success', `Téléchargement de "${fname}"...`);
+        showStatus('yt-status', 'success', `✅ Téléchargement de "${fname}" en cours...`);
         triggerDownload(data.url, fname);
         return true;
     }
 
     if (data.status === 'picker') {
         const items = data.picker || [];
-        if (!items.length) throw new Error('picker: no items');
+        if (!items.length) throw new Error('picker vide : aucun flux disponible');
         let html = `<strong>${items.length} flux disponibles — cliquez pour télécharger :</strong><br><br>`;
         items.forEach((item, i) => {
-            const label = item.type || `Stream ${i + 1}`;
-            const thumb = item.thumb ? `<img src="${item.thumb}" style="height:36px;vertical-align:middle;margin-right:6px;border-radius:3px">` : '';
+            const label = item.type || `Flux ${i + 1}`;
+            const thumb = item.thumb
+                ? `<img src="${item.thumb}" style="height:36px;vertical-align:middle;margin-right:6px;border-radius:3px">`
+                : '';
             html += `${thumb}<a href="${item.url}" target="_blank" rel="noopener" style="color:#60a5fa">${label}</a><br>`;
         });
         const el = document.getElementById('yt-status');
@@ -151,79 +208,109 @@ async function tryCobaltInstance(instanceUrl, payload) {
         return true;
     }
 
-    throw new Error(`unexpected cobalt status: ${data.status}`);
+    throw new Error(`statut cobalt inattendu : "${data.status}" — cette instance utilise peut-être une version d'API incompatible`);
 }
 
 function triggerDownload(url, filename) {
     const a = document.createElement('a');
-    a.href = url; a.download = filename; a.target = '_blank'; a.rel = 'noopener';
-    document.body.appendChild(a); a.click();
+    a.href = url;
+    a.download = filename;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
     setTimeout(() => document.body.removeChild(a), 500);
 }
 
 
 // =====================================================================
-//  FFMPEG 0.11.x — shared instance
-//  API: createFFmpeg / ffmpeg.FS / ffmpeg.run / fetchFile
+//  FFMPEG 0.11.x — instance partagée
+//  API : FFmpeg.createFFmpeg / ffmpeg.FS / ffmpeg.run / FFmpeg.fetchFile
 // =====================================================================
 
-// Global ffmpeg instance (shared between Convert and Compress tabs)
-// Progress events are routed via ffProgressCallback — set it before each run
+// Instance globale FFmpeg partagée entre les onglets Convert et Compress
 let ffmpeg = null;
-let ffLoading = false;
-let ffProgressCallback = null; // (pct: number) => void — swapped per-tab
+let ffLoadPromise = null; // FIX: remplace ffLoading+while-loop → Promise unique réutilisable
+let ffProgressCallback = null;
 
 async function loadFFmpeg(onProgress) {
+    // FIX: toujours mettre à jour le callback, même si ffmpeg est déjà chargé
     ffProgressCallback = onProgress || null;
 
-    if (ffmpeg && ffmpeg.isLoaded()) return; // already ready
+    // Déjà chargé → rien à faire
+    if (ffmpeg && ffmpeg.isLoaded()) return;
 
-    if (ffLoading) {
-        // another tab triggered loading, wait for it
-        while (ffLoading) await sleep(100);
+    // Chargement déjà en cours → on attend la même Promise (pas de while-loop deadlock)
+    // FIX: on réutilise la Promise existante au lieu d'une boucle while infinie
+    if (ffLoadPromise) {
+        await ffLoadPromise;
+        // Après l'attente, si ffmpeg n'est pas chargé c'est que le chargement a échoué
+        if (!ffmpeg || !ffmpeg.isLoaded()) {
+            throw new Error('FFmpeg n\'a pas pu être chargé (tentative précédente échouée).');
+        }
         return;
     }
 
-    ffLoading = true;
-
-    if (typeof FFmpeg === 'undefined' || !FFmpeg.createFFmpeg) {
-        ffLoading = false;
-        throw new Error('FFmpeg library did not load — vérifiez votre connexion et rechargez la page.');
+    // Vérification que la librairie UMD est bien disponible en global
+    if (typeof FFmpeg === 'undefined' || typeof FFmpeg.createFFmpeg !== 'function') {
+        throw new Error(
+            'La librairie FFmpeg.wasm n\'a pas pu être chargée depuis le CDN. ' +
+            'Vérifiez votre connexion internet et rechargez la page.'
+        );
     }
 
-    try {
+    // Lance le chargement et stocke la Promise pour les appels concurrents
+    ffLoadPromise = (async () => {
         const { createFFmpeg } = FFmpeg;
 
+        // FIX: log: true pour voir les erreurs en console — INDISPENSABLE au débogage.
+        // Passez à false en production si les logs sont trop verbeux.
         ffmpeg = createFFmpeg({
             corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
-            log: false,
+            log: true,
             progress: ({ ratio }) => {
                 const pct = Math.min(99, Math.round(ratio * 100));
-                if (ffProgressCallback) ffProgressCallback(pct);
+                if (typeof ffProgressCallback === 'function') ffProgressCallback(pct);
             },
         });
 
         await ffmpeg.load();
-        ffLoading = false;
-        console.log('ffmpeg 0.11.x loaded OK');
+        console.log('[ffmpeg] 0.11.x chargé avec succès ✓');
+    })();
 
+    try {
+        await ffLoadPromise;
     } catch (err) {
-        ffLoading = false;
+        // Réinitialise pour permettre une nouvelle tentative plus tard
         ffmpeg = null;
-        throw new Error('Échec du chargement de FFmpeg : ' + err.message +
-            '\nAssurez-vous que la page est servie via HTTP (pas file://) ou essayez un autre navigateur.');
+        ffLoadPromise = null;
+        throw new Error(
+            'Échec du chargement de FFmpeg : ' + err.message + '\n' +
+            'Causes fréquentes :\n' +
+            '• La page doit être servie via HTTP (pas file://)\n' +
+            '• Vérifiez la console (F12) pour les erreurs CORS ou réseau\n' +
+            '• Essayez de désactiver vos extensions de navigateur (ad-blockers)'
+        );
     }
 }
 
-// Write → run → read → unlink helper
+// Écriture → exécution → lecture → nettoyage (helper commun)
 async function ffRun(inputName, inputFile, outputName, args) {
     const { fetchFile } = FFmpeg;
+
     ffmpeg.FS('writeFile', inputName, await fetchFile(inputFile));
-    console.log('ffmpeg run:', ['-i', inputName, ...args, outputName].join(' '));
+
+    const fullCmd = ['-i', inputName, ...args, outputName].join(' ');
+    console.log('[ffmpeg] commande :', fullCmd);
+
     await ffmpeg.run('-i', inputName, ...args, outputName);
+
     const data = ffmpeg.FS('readFile', outputName);
+
+    // Nettoyage du système de fichiers virtuel
     try { ffmpeg.FS('unlink', inputName); } catch (_) {}
     try { ffmpeg.FS('unlink', outputName); } catch (_) {}
+
     return data;
 }
 
@@ -255,11 +342,12 @@ function getFileType(filename) {
     const ext = getExt(filename);
     if (VIDEO_EXTS.has(ext)) return 'video';
     if (AUDIO_EXTS.has(ext)) return 'audio';
-    return 'video';
+    return 'video'; // fallback
 }
 
 function getMimeType(ext) {
-    return { mp4:'video/mp4', mkv:'video/x-matroska', webm:'video/webm', avi:'video/x-msvideo',
+    return {
+        mp4:'video/mp4', mkv:'video/x-matroska', webm:'video/webm', avi:'video/x-msvideo',
         mov:'video/quicktime', flv:'video/x-flv', ts:'video/mp2t', gif:'image/gif',
         mp3:'audio/mpeg', aac:'audio/aac', m4a:'audio/mp4', flac:'audio/flac',
         wav:'audio/wav', ogg:'audio/ogg', opus:'audio/opus', aiff:'audio/aiff',
@@ -267,18 +355,18 @@ function getMimeType(ext) {
 }
 
 function sizeStr(bytes) {
-    if (bytes > 1024**3) return (bytes / 1024**3).toFixed(2) + ' GB';
-    return (bytes / 1024**2).toFixed(2) + ' MB';
+    if (bytes > 1024 ** 3) return (bytes / 1024 ** 3).toFixed(2) + ' GB';
+    return (bytes / 1024 ** 2).toFixed(2) + ' MB';
 }
 
 function resultHTML(dlName, blobUrl, origBytes, newBytes) {
-    const origMB = (origBytes / 1024**2).toFixed(2);
-    const newMB  = (newBytes  / 1024**2).toFixed(2);
+    const origMB = (origBytes / 1024 ** 2).toFixed(2);
+    const newMB  = (newBytes  / 1024 ** 2).toFixed(2);
     const delta  = newBytes < origBytes
         ? `&#8595; ${((1 - newBytes / origBytes) * 100).toFixed(1)}% plus léger`
         : `&#8593; ${((newBytes / origBytes - 1) * 100).toFixed(1)}% plus lourd`;
     return `<div class="result-box">
-        <p>Terminé ! &nbsp;·&nbsp; <strong>${dlName}</strong><br>${origMB} MB &rarr; ${newMB} MB &nbsp;(${delta})</p>
+        <p>✅ Terminé ! &nbsp;·&nbsp; <strong>${dlName}</strong><br>${origMB} MB &rarr; ${newMB} MB &nbsp;(${delta})</p>
         <a href="${blobUrl}" download="${dlName}" class="btn-primary">&#8681; Télécharger</a>
     </div>`;
 }
@@ -294,10 +382,16 @@ let currentConvertFileType = null;
 (function setupConvertDrop() {
     const zone  = document.getElementById('convert-drop-zone');
     const input = document.getElementById('convert-file-input');
-    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('drag-over'); });
     zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-    zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) handleConvertFile(e.dataTransfer.files[0]); });
-    input.addEventListener('change', e => { if (e.target.files[0]) handleConvertFile(e.target.files[0]); });
+    zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        if (e.dataTransfer.files[0]) handleConvertFile(e.dataTransfer.files[0]);
+    });
+    input.addEventListener('change', e => {
+        if (e.target.files[0]) handleConvertFile(e.target.files[0]);
+    });
 })();
 
 function handleConvertFile(file) {
@@ -312,7 +406,8 @@ function handleConvertFile(file) {
     const inputExt = getExt(file.name);
     OUTPUT_FORMATS[currentConvertFileType].forEach(fmt => {
         const opt = document.createElement('option');
-        opt.value = fmt; opt.textContent = fmt.toUpperCase();
+        opt.value = fmt;
+        opt.textContent = fmt.toUpperCase();
         if (fmt === 'mp4' && currentConvertFileType === 'video') opt.selected = true;
         else if (fmt === 'mp3' && currentConvertFileType === 'audio') opt.selected = true;
         else if (fmt === inputExt) opt.selected = true;
@@ -333,7 +428,9 @@ function setAudioCodecDefault() {
     const def = AUDIO_CODEC_DEFAULTS[fmt];
     if (!def) return;
     const sel = document.getElementById('a-codec');
-    for (const opt of sel.options) { if (opt.value === def) { opt.selected = true; break; } }
+    for (const opt of sel.options) {
+        if (opt.value === def) { opt.selected = true; break; }
+    }
     onACodecChange();
 }
 
@@ -347,8 +444,9 @@ function onACodecChange() {
 
 function onVCodecChange() {
     const isCopy = document.getElementById('v-codec').value === 'copy';
-    ['crf-wrap','preset-wrap'].forEach(id => {
+    ['crf-wrap', 'preset-wrap'].forEach(id => {
         const el = document.getElementById(id);
+        if (!el) return;
         el.style.opacity = isCopy ? '0.35' : '';
         el.style.pointerEvents = isCopy ? 'none' : '';
     });
@@ -363,7 +461,8 @@ function toggleAudioOutputSettings() {
 }
 
 function resetConvertFile() {
-    currentConvertFile = null; currentConvertFileType = null;
+    currentConvertFile = null;
+    currentConvertFileType = null;
     document.getElementById('convert-file-input').value = '';
     document.getElementById('convert-file-settings').classList.add('hidden');
 }
@@ -379,32 +478,36 @@ async function startConvert() {
     pwrap.classList.remove('hidden');
     document.getElementById('convert-result').classList.add('hidden');
     pfill.className = '';
-    setP('convert', 0, 'Démarrage...', 'Premier chargement : 10–30s, plus rapide ensuite.');
+    setP('convert', 5, 'Démarrage...', 'Premier chargement de FFmpeg : 10–30s, plus rapide ensuite.');
 
     try {
-        await loadFFmpeg(pct => setP('convert', pct, `Conversion... ${pct}%`, ''));
+        await loadFFmpeg(pct => setP('convert', pct, `Chargement FFmpeg... ${pct}%`, ''));
 
-        setP('convert', 0, 'Lecture du fichier...', '');
+        setP('convert', 5, 'Lecture du fichier...', '');
 
+        // FIX: trim — beforeInput (-ss avant -i = seek rapide) ET afterInput (-to après -i)
+        // Les deux étaient calculés mais seul afterInput était injecté dans runArgs.
+        // On construit maintenant manuellement la commande ffmpeg pour gérer l'ordre des args.
         const trimStart = document.getElementById('trim-start').value.trim();
         const trimEnd   = document.getElementById('trim-end').value.trim();
 
-        // trim args go before -i for fast seek
-        const beforeInput = trimStart ? ['-ss', trimStart] : [];
-        const afterInput  = trimEnd   ? ['-to', trimEnd]   : [];
+        // Pour le seek rapide, -ss doit être AVANT -i (inputArgs)
+        // Pour le point de fin, -to doit être APRÈS -i avec le timestamp depuis le début du fichier
+        const inputArgs = trimStart ? ['-ss', trimStart] : [];
+        const trimArgs  = trimEnd   ? ['-to', trimEnd]   : [];
 
         const convArgs = buildFFmpegArgs(outFormat, currentConvertFileType);
-        // for 0.11.x, we can't put args before -i via the helper, so we build manually
-        const fullArgs = [...afterInput, ...convArgs, outFormat === 'ts' ? [] : []].flat();
 
-        // ffmpeg.run in 0.11.x doesn't support args before -i; trim via -ss after -i instead
-        const runArgs = [...afterInput, ...convArgs];
+        // Ordre final : [inputArgs...] -i input [trimArgs...] [convArgs...] output
+        const runArgs = [...trimArgs, ...convArgs];
 
         const inputName  = 'input.'  + inputExt;
         const outputName = 'output.' + outFormat;
-        setP('convert', 0, 'Conversion en cours...', '');
 
-        const outputData = await ffRun(inputName, currentConvertFile, outputName, runArgs);
+        setP('convert', 10, 'Conversion en cours...', 'Ne fermez pas cet onglet.');
+
+        // FIX: on passe inputArgs séparément pour qu'ils soient placés AVANT -i
+        const outputData = await ffRunWithInputArgs(inputName, currentConvertFile, outputName, inputArgs, runArgs);
         const blob    = new Blob([outputData.buffer], { type: getMimeType(outFormat) });
         const blobUrl = URL.createObjectURL(blob);
         const dlName  = currentConvertFile.name.replace(/\.[^/.]+$/, '') + '_converted.' + outFormat;
@@ -415,10 +518,30 @@ async function startConvert() {
         pfill.classList.add('done');
 
     } catch (err) {
-        console.error('convert failed:', err);
-        setP('convert', 0, 'Erreur : ' + err.message, 'Ouvrez la console (F12) pour plus de détails.');
+        console.error('[convert] erreur :', err);
+        setP('convert', 0, '❌ Erreur : ' + err.message, 'Ouvrez la console (F12) pour plus de détails.');
         pfill.classList.add('error');
     }
+}
+
+// FIX: version de ffRun qui accepte des arguments AVANT -i (pour le seek rapide)
+async function ffRunWithInputArgs(inputName, inputFile, outputName, inputArgs, outputArgs) {
+    const { fetchFile } = FFmpeg;
+
+    ffmpeg.FS('writeFile', inputName, await fetchFile(inputFile));
+
+    // Construction de la commande complète :
+    // ffmpeg [inputArgs...] -i inputName [outputArgs...] outputName
+    const fullArgs = [...inputArgs, '-i', inputName, ...outputArgs, outputName];
+    console.log('[ffmpeg] commande complète :', fullArgs.join(' '));
+
+    await ffmpeg.run(...fullArgs);
+
+    const data = ffmpeg.FS('readFile', outputName);
+    try { ffmpeg.FS('unlink', inputName);  } catch (_) {}
+    try { ffmpeg.FS('unlink', outputName); } catch (_) {}
+
+    return data;
 }
 
 function buildFFmpegArgs(outputFormat, fileType) {
@@ -434,7 +557,7 @@ function buildFFmpegArgs(outputFormat, fileType) {
         const res       = document.getElementById('v-res').value;
         const fps       = document.getElementById('v-fps').value;
         const pixFmt    = document.getElementById('v-pixel').value;
-        const stripAudio = document.getElementById('v-strip-audio').value;
+        const stripAudio  = document.getElementById('v-strip-audio').value;
         const deinterlace = document.getElementById('v-deinterlace').checked;
 
         if (vCodec === 'copy') {
@@ -442,7 +565,11 @@ function buildFFmpegArgs(outputFormat, fileType) {
         } else {
             args.push('-c:v', vCodec);
             if (vCodec === 'libvpx-vp9') {
-                const vp9map = { ultrafast:'realtime', superfast:'realtime', veryfast:'realtime', faster:'good', fast:'good', medium:'good', slow:'best', slower:'best', veryslow:'best' };
+                const vp9map = {
+                    ultrafast:'realtime', superfast:'realtime', veryfast:'realtime',
+                    faster:'good', fast:'good', medium:'good',
+                    slow:'best', slower:'best', veryslow:'best',
+                };
                 args.push('-deadline', vp9map[preset] || 'good');
                 if (vBitrate > 0) args.push('-b:v', vBitrate + 'k');
                 else args.push('-crf', crf, '-b:v', '0');
@@ -450,7 +577,7 @@ function buildFFmpegArgs(outputFormat, fileType) {
                 args.push('-preset', preset);
                 if (vBitrate > 0) {
                     args.push('-b:v', vBitrate + 'k');
-                    if (vMaxrate > 0) { args.push('-maxrate', vMaxrate + 'k', '-bufsize', (vMaxrate * 2) + 'k'); }
+                    if (vMaxrate > 0) args.push('-maxrate', vMaxrate + 'k', '-bufsize', (vMaxrate * 2) + 'k');
                 } else {
                     args.push('-crf', crf);
                 }
@@ -480,7 +607,11 @@ function buildFFmpegArgs(outputFormat, fileType) {
         const gifFps = document.getElementById('v-fps').value || '15';
         const vfIdx  = args.indexOf('-vf');
         if (vfIdx !== -1) args.splice(vfIdx, 2);
-        args.push('-an', '-vf', `fps=${gifFps},scale=${scale}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer`);
+        args.push(
+            '-an',
+            '-vf',
+            `fps=${gifFps},scale=${scale}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer`
+        );
     }
 
     return args;
@@ -522,10 +653,16 @@ let currentCompressFileType = null;
 (function setupCompressDrop() {
     const zone  = document.getElementById('compress-drop-zone');
     const input = document.getElementById('compress-file-input');
-    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('drag-over'); });
     zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-    zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) handleCompressFile(e.dataTransfer.files[0]); });
-    input.addEventListener('change', e => { if (e.target.files[0]) handleCompressFile(e.target.files[0]); });
+    zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        if (e.dataTransfer.files[0]) handleCompressFile(e.dataTransfer.files[0]);
+    });
+    input.addEventListener('change', e => {
+        if (e.target.files[0]) handleCompressFile(e.target.files[0]);
+    });
 })();
 
 function handleCompressFile(file) {
@@ -542,12 +679,15 @@ function handleCompressFile(file) {
     fmtSel.innerHTML = '';
     const inputExt = getExt(file.name);
     const sameOpt = document.createElement('option');
-    sameOpt.value = 'same'; sameOpt.textContent = `Même format (${inputExt.toUpperCase()})`; sameOpt.selected = true;
+    sameOpt.value = 'same';
+    sameOpt.textContent = `Même format (${inputExt.toUpperCase()})`;
+    sameOpt.selected = true;
     fmtSel.appendChild(sameOpt);
     (isAudio ? AUDIO_OUTPUT_FORMATS : VIDEO_OUTPUT_FORMATS).forEach(fmt => {
         if (fmt === inputExt) return;
         const opt = document.createElement('option');
-        opt.value = fmt; opt.textContent = fmt.toUpperCase();
+        opt.value = fmt;
+        opt.textContent = fmt.toUpperCase();
         fmtSel.appendChild(opt);
     });
 
@@ -562,7 +702,8 @@ function onCompressPresetChange() {
 }
 
 function resetCompressFile() {
-    currentCompressFile = null; currentCompressFileType = null;
+    currentCompressFile = null;
+    currentCompressFileType = null;
     document.getElementById('compress-file-input').value = '';
     document.getElementById('compress-settings').classList.add('hidden');
 }
@@ -579,12 +720,12 @@ async function startCompress() {
     document.getElementById('compress-progress-wrap').classList.remove('hidden');
     document.getElementById('compress-result').classList.add('hidden');
     pfill.className = '';
-    setP('compress', 0, 'Démarrage...', 'Premier chargement : 10–30s, plus rapide ensuite.');
+    setP('compress', 5, 'Démarrage...', 'Premier chargement de FFmpeg : 10–30s, plus rapide ensuite.');
 
     try {
-        await loadFFmpeg(pct => setP('compress', pct, `Compression... ${pct}%`, ''));
+        await loadFFmpeg(pct => setP('compress', pct, `Chargement FFmpeg... ${pct}%`, ''));
 
-        setP('compress', 0, 'Compression en cours...', '');
+        setP('compress', 10, 'Compression en cours...', 'Ne fermez pas cet onglet.');
 
         const inputName  = 'cinput.'  + inputExt;
         const outputName = 'coutput.' + outFormat;
@@ -601,8 +742,8 @@ async function startCompress() {
         pfill.classList.add('done');
 
     } catch (err) {
-        console.error('compress failed:', err);
-        setP('compress', 0, 'Erreur : ' + err.message, 'Ouvrez la console (F12) pour plus de détails.');
+        console.error('[compress] erreur :', err);
+        setP('compress', 0, '❌ Erreur : ' + err.message, 'Ouvrez la console (F12) pour plus de détails.');
         pfill.classList.add('error');
     }
 }
@@ -614,7 +755,9 @@ function buildCompressArgs(outFormat, isAudio) {
     if (!isAudio) {
         const presetVal   = document.getElementById('compress-preset').value;
         const crfMap      = { light: '20', medium: '26', heavy: '32' };
-        const crf         = presetVal === 'custom' ? document.getElementById('compress-crf').value : (crfMap[presetVal] || '26');
+        const crf         = presetVal === 'custom'
+            ? document.getElementById('compress-crf').value
+            : (crfMap[presetVal] || '26');
         const presetSpeed = presetVal === 'light' ? 'slow' : (presetVal === 'heavy' ? 'fast' : 'medium');
 
         args.push('-c:v', 'libx264', '-crf', crf, '-preset', presetSpeed);
@@ -629,7 +772,11 @@ function buildCompressArgs(outFormat, isAudio) {
         if (audioBr === 'copy') {
             args.push('-c:a', 'copy');
         } else {
-            const codecMap = { mp3:'libmp3lame', aac:'aac', m4a:'aac', ogg:'libvorbis', opus:'libopus', flac:'flac', wav:'pcm_s16le', aiff:'pcm_s16le' };
+            const codecMap = {
+                mp3:'libmp3lame', aac:'aac', m4a:'aac',
+                ogg:'libvorbis', opus:'libopus', flac:'flac',
+                wav:'pcm_s16le', aiff:'pcm_s16le',
+            };
             const codec = codecMap[outFormat] || 'libmp3lame';
             const lossless = ['flac','pcm_s16le'];
             args.push('-c:a', codec);
@@ -652,7 +799,7 @@ function setP(tab, pct, text, hint) {
     const hnt  = document.getElementById(`${tab}-progress-hint`);
     if (fill) fill.style.width = Math.min(100, pct) + '%';
     if (txt)  txt.textContent  = text;
-    if (hnt)  hnt.textContent  = hint;
+    if (hnt)  hnt.textContent  = hint || '';
 }
 
 
@@ -662,9 +809,8 @@ function setP(tab, pct, text, hint) {
 
 function showStatus(id, type, msg) {
     const el = document.getElementById(id);
+    if (!el) return;
     el.className = 'status ' + type;
     el.textContent = msg;
     el.classList.remove('hidden');
 }
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
