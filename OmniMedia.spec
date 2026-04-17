@@ -67,7 +67,7 @@ bundled_binaries = _find_local_ffmpeg() if BUNDLE_FFMPEG else []
 if BUNDLE_FFMPEG:
     print(f"\n[OmniMedia.spec] ✔ Complete build — bundling FFmpeg: {[b[0] for b in bundled_binaries]}\n")
 else:
-    print("\n[OmniMedia.spec] ℹ Standard build — FFmpeg NOT bundled (users must install it)\n")
+print("\n[OmniMedia.spec] INFO: Standard build - FFmpeg NOT bundled...\n")
 
 # ── Collect datas (resources) ─────────────────────────────────────────────────
 
