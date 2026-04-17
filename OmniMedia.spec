@@ -64,11 +64,12 @@ def _find_local_ffmpeg() -> list[tuple[str, str]]:
 
 bundled_binaries = _find_local_ffmpeg() if BUNDLE_FFMPEG else []
 
-if BUNDLE_FFMPEG:
-    print(f"\n[OmniMedia.spec] ✔ Complete build — bundling FFmpeg: {[b[0] for b in bundled_binaries]}\n")
+if bundle_ffmpeg:
+    # ton code pour inclure ffmpeg ici
+    print("\n[OmniMedia.spec] Bundling FFmpeg...\n")
 else:
-print("\n[OmniMedia.spec] INFO: Standard build - FFmpeg NOT bundled...\n")
-
+    print("\n[OmniMedia.spec] INFO: Standard build - FFmpeg NOT bundled...\n")
+    
 # ── Collect datas (resources) ─────────────────────────────────────────────────
 
 datas = [
