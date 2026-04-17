@@ -1,69 +1,113 @@
 # -*- mode: python ; coding: utf-8 -*-
-# OmniMedia.spec — PyInstaller build script for OmniMedia v4
+# OmniMedia.spec — PyInstaller build script for OmniMedia v4.5
 #
-# Build command:
-#   pyinstaller OmniMedia.spec
+# TWO BUILD PROFILES (set via environment variable or edit BUNDLE_FFMPEG below):
 #
-# The output is a single self-contained executable:
-#   dist/OmniMedia.exe   (Windows)
-#   dist/OmniMedia       (macOS / Linux)
+#   Standard build  — FFmpeg NOT included (smaller exe, ~60 MB)
+#     pyinstaller OmniMedia.spec
 #
-# ─── Notes ────────────────────────────────────────────────────────────────────
-# • FFmpeg is NOT bundled here (licensing). Users must place ffmpeg.exe
-#   alongside OmniMedia.exe OR have it in PATH.
-#   The app will detect ffmpeg.exe in its own directory automatically.
-# • yt-dlp is bundled as a Python package (hidden import below).
-# • All image / style assets are included via the datas list.
+#   Complete build  — FFmpeg binaries bundled inside the exe (no setup for users)
+#     set OMNIMEDIA_BUNDLE_FFMPEG=1 && pyinstaller OmniMedia.spec   (Windows)
+#     OMNIMEDIA_BUNDLE_FFMPEG=1 pyinstaller OmniMedia.spec          (macOS/Linux)
+#
+# For the "Complete" build, place the FFmpeg binaries next to this spec file:
+#   Windows : ffmpeg.exe  ffprobe.exe
+#   macOS   : ffmpeg      ffprobe         (from https://evermeet.cx/ffmpeg/)
+#   Linux   : ffmpeg      ffprobe         (from https://johnvansickle.com/ffmpeg/)
+#
+# The app detects bundled ffmpeg.exe / ffmpeg in its own directory automatically.
 # ──────────────────────────────────────────────────────────────────────────────
 
+import os
 import sys
 from pathlib import Path
 
 block_cipher = None
 
+# ── Build profile ─────────────────────────────────────────────────────────────
+
+BUNDLE_FFMPEG: bool = os.environ.get("OMNIMEDIA_BUNDLE_FFMPEG", "0").strip() == "1"
+
+# ── Locate FFmpeg binaries for the Complete build ─────────────────────────────
+
+def _find_local_ffmpeg() -> list[tuple[str, str]]:
+    """
+    Return a list of (source_path, dest_folder) tuples for PyInstaller's
+    `binaries` list.  Only called when BUNDLE_FFMPEG is True.
+    Raises FileNotFoundError if the binaries are missing.
+    """
+    here = Path(__file__).parent
+    names = (
+        ["ffmpeg.exe", "ffprobe.exe"]
+        if sys.platform == "win32"
+        else ["ffmpeg", "ffprobe"]
+    )
+    result = []
+    missing = []
+    for name in names:
+        p = here / name
+        if p.exists():
+            result.append((str(p), "."))
+        else:
+            missing.append(str(p))
+    if missing:
+        raise FileNotFoundError(
+            f"Complete build requested but FFmpeg binaries not found:\n"
+            + "\n".join(f"  {m}" for m in missing)
+            + "\n\nDownload from:\n"
+            + "  Windows : https://www.gyan.dev/ffmpeg/builds/ (ffmpeg-release-essentials)\n"
+            + "  macOS   : https://evermeet.cx/ffmpeg/\n"
+            + "  Linux   : https://johnvansickle.com/ffmpeg/\n"
+        )
+    return result
+
+
+bundled_binaries = _find_local_ffmpeg() if BUNDLE_FFMPEG else []
+
+if BUNDLE_FFMPEG:
+    print(f"\n[OmniMedia.spec] ✔ Complete build — bundling FFmpeg: {[b[0] for b in bundled_binaries]}\n")
+else:
+    print("\n[OmniMedia.spec] ℹ Standard build — FFmpeg NOT bundled (users must install it)\n")
+
 # ── Collect datas (resources) ─────────────────────────────────────────────────
-# Format: (source_glob_or_file, destination_folder_inside_bundle)
 
 datas = [
-    # Application icon
     ("logoOmniMedia.png", "."),
 ]
 
 # ── Hidden imports ────────────────────────────────────────────────────────────
-# Modules that PyInstaller cannot detect through static analysis.
 
 hidden_imports = [
-    # yt-dlp extractors (large but required)
+    # yt-dlp
     "yt_dlp",
     "yt_dlp.extractor",
     "yt_dlp.extractor._extractors",
     "yt_dlp.postprocessor",
     "yt_dlp.downloader",
     "yt_dlp.utils",
-    # mutagen codecs
+    # mutagen
     "mutagen",
     "mutagen.id3",
     "mutagen.mp3",
     "mutagen.flac",
     "mutagen.mp4",
     "mutagen.ogg",
-    # PyQt6 sub-modules sometimes missed
+    # PyQt6
     "PyQt6.QtCore",
     "PyQt6.QtGui",
     "PyQt6.QtWidgets",
     "PyQt6.QtNetwork",
-    # System theme detection
+    # Misc
     "darkdetect",
-    # Optional browser cookies
     "browser_cookie3",
-    # Stdlib modules occasionally missed in one-file mode
+    "logging.handlers",     # RotatingFileHandler used by app_logger
     "json",
     "pathlib",
     "subprocess",
     "urllib.request",
     "ctypes",
     "ctypes.wintypes",
-    "winreg",   # Windows only — silently ignored on macOS/Linux
+    "winreg",
 ]
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
@@ -71,19 +115,17 @@ hidden_imports = [
 a = Analysis(
     ["main.py"],
     pathex=["."],
-    binaries=[],
+    binaries=bundled_binaries,
     datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Exclude heavy unused packages to reduce exe size
         "matplotlib",
         "numpy",
         "pandas",
         "scipy",
-        "PIL",       # Pillow (not used)
         "tkinter",
         "test",
         "unittest",
@@ -96,7 +138,9 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# ── One-File executable ───────────────────────────────────────────────────────
+# ── Exe name reflects build profile ──────────────────────────────────────────
+
+exe_name = "OmniMedia-Complete" if BUNDLE_FFMPEG else "OmniMedia"
 
 exe = EXE(
     pyz,
@@ -105,27 +149,29 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="OmniMedia",
+    name=exe_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,           # UPX compression — reduces exe size by ~30 %
-                        # Install UPX from https://upx.github.io/
+    upx=True,
     upx_exclude=[
-        # Some Qt DLLs crash when compressed with UPX — exclude them
         "qwindows.dll",
         "qoffscreen.dll",
+        # Never UPX-compress the bundled FFmpeg — it breaks the binary
+        "ffmpeg.exe",
+        "ffprobe.exe",
+        "ffmpeg",
+        "ffprobe",
     ],
     runtime_tmpdir=None,
-    console=False,      # no terminal window for end-users
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # ── Windows-specific ──────────────────────────────────────────────────────
-    icon="logoOmniMedia.png",        # .ico recommended; .png accepted by newer PyInstaller
-    version_file=None,               # optional: add a version_info.txt here
-    uac_admin=False,                 # do NOT request admin — breaks portability
+    icon="logoOmniMedia.png",
+    version_file=None,
+    uac_admin=False,
     uac_uiaccess=False,
 )

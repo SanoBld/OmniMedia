@@ -1,16 +1,19 @@
 """
-main.py — OmniMedia v4.4  (UI Premium — Redesign)
-Nouveautés vs v4.3 :
-  - Structure centrée max-width 800px via _make_scroll_tab()
-  - Marges uniformes 40 px sur tous les onglets
-  - Suppression de tous les hline() dans les _setup_ui()
-  - Espacement vertical strict (addSpacing / addStretch)
-  - Bouton primaire solide bleu (cf. ui_styles v4.4)
+main.py — OmniMedia v4.5  (UI Premium — Redesign)
+Nouveautés vs v4.4 :
+  - setup_logging() appelé au lancement → logs dans ~/.omnimedia/logs/app.log
+  - check_ffmpeg_capabilities() au démarrage + bandeau d'avertissement si H.265 absent
+  - Speed / ETA du worker téléchargement affichés dans DownloadTab
 """
 from __future__ import annotations
 
 import sys, os, subprocess, time
 from pathlib import Path
+
+# ── Logging ───────────────────────────────
+from app_logger import setup_logging, get_logger, log_path
+setup_logging()
+logger = get_logger(__name__)
 
 # ── Dependency check ──────────────────────────────────────────────────────────
 def _check_dependencies() -> None:
@@ -63,6 +66,7 @@ from converter import (
     PRESETS, PresetManager, _refresh_presets,
     get_media_info, format_media_info,
     COMPRESS_TARGETS, build_compress_args, compute_target_bitrate,
+    check_ffmpeg_capabilities,
 )
 
 APP_NAME    = "OmniMedia"
@@ -661,6 +665,15 @@ class DownloadTab(QWidget):
         self.progress.setTextVisible(False); self.progress.setFixedHeight(5)
         root.addWidget(self.progress)
 
+        # ── Speed / ETA ───────────────────────────────────────────────────────
+        self.speed_eta_lbl = QLabel("")
+        self.speed_eta_lbl.setObjectName("status_info")
+        self.speed_eta_lbl.setStyleSheet(
+            f"font-size:11px; color:{COLORS['text_muted']}; background:transparent;"
+        )
+        self.speed_eta_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+        root.addWidget(self.speed_eta_lbl)
+
         # ── Statut + bouton ouvrir ────────────────────────────────────────────
         status_row = QHBoxLayout(); status_row.setSpacing(10)
         self.status_lbl = QLabel(t("ready")); self.status_lbl.setObjectName("status_info")
@@ -763,6 +776,8 @@ class DownloadTab(QWidget):
         self._worker = DownloadWorker(url, self._output_dir, mode, opts,
                                       playlist_mode=playlist, auto_tag=auto_tag, parent=self)
         self._worker.progress.connect(self._on_progress)
+        self._worker.speed.connect(self._on_speed)
+        self._worker.eta.connect(self._on_eta)
         self._worker.status.connect(lambda msg, _=None: self.status_lbl.setText(msg))
         self._worker.finished.connect(self._on_finished)
         self._worker.start()
@@ -770,9 +785,27 @@ class DownloadTab(QWidget):
     def _on_progress(self, v: int) -> None:
         self.progress.setValue(v); _taskbar.set_state(_WinTaskbar.TBPF_NORMAL); _taskbar.set_progress(v)
 
+    def _on_speed(self, speed: str) -> None:
+        self._dl_speed = speed
+        self._refresh_speed_eta()
+
+    def _on_eta(self, eta: str) -> None:
+        self._dl_eta = eta
+        self._refresh_speed_eta()
+
+    def _refresh_speed_eta(self) -> None:
+        speed = getattr(self, "_dl_speed", "")
+        eta   = getattr(self, "_dl_eta", "")
+        parts = []
+        if speed: parts.append(speed)
+        if eta:   parts.append(f"ETA {eta}")
+        self.speed_eta_lbl.setText("  ·  ".join(parts))
+
     def _on_finished(self, ok: bool, path: str) -> None:
         elapsed = time.monotonic() - getattr(self, "_start_time", time.monotonic())
         self._last_file = path; self._set_busy(False)
+        self._dl_speed = ""; self._dl_eta = ""
+        self.speed_eta_lbl.setText("")
         if ok:
             self.progress.setValue(100); self.open_btn.show()
             set_status(self.status_lbl, f"✔  {Path(path).name}", "ok")
@@ -2109,6 +2142,9 @@ class MainWindow(QMainWindow):
         self._setup_ui(); self._setup_tray(); self._attach_taskbar(); self._check_github_version()
         if cfg.window_opacity < 100:
             self.setWindowOpacity(cfg.window_opacity / 100.0)
+        # Deferred FFmpeg check — runs after the event loop starts so the window
+        # is fully visible before any dialog/banner appears.
+        QTimer.singleShot(400, self._check_ffmpeg)
 
     def _setup_ui(self) -> None:
         central = QWidget(); self.setCentralWidget(central)
@@ -2157,6 +2193,64 @@ class MainWindow(QMainWindow):
             f"border-top:1px solid {COLORS['border_soft']}; padding:8px;"
         )
         root.addWidget(footer)
+
+    def _check_ffmpeg(self) -> None:
+        """Run FFmpeg capability check and surface any warnings to the user."""
+        caps = check_ffmpeg_capabilities()
+        logger.info(
+            "FFmpeg check — available=%s version=%s codecs=%s",
+            caps.available, caps.version_str,
+            [k for k, v in caps.codecs.items() if v],
+        )
+        if caps.warnings:
+            for w in caps.warnings:
+                logger.warning("FFmpeg: %s", w)
+            self._show_ffmpeg_banner(caps.warnings)
+
+    def _show_ffmpeg_banner(self, warnings: list[str]) -> None:
+        """
+        Inject a dismissible warning banner at the top of the window.
+        Shows only the first warning to keep the UI clean; the rest go to the log.
+        """
+        if not warnings:
+            return
+        banner = QFrame(self.centralWidget())
+        banner.setObjectName("ffmpeg_warning_banner")
+        banner.setStyleSheet(
+            f"QFrame#ffmpeg_warning_banner {{"
+            f"  background: {COLORS.get('warn_bg', '#3D2E00')};"
+            f"  border-bottom: 1px solid {COLORS.get('warn_border', '#7A5C00')};"
+            f"  padding: 0px;"
+            f"}}"
+        )
+        lay = QHBoxLayout(banner); lay.setContentsMargins(20, 8, 12, 8); lay.setSpacing(10)
+
+        icon = QLabel("⚠")
+        icon.setStyleSheet(f"font-size:15px; background:transparent; color:{COLORS.get('warning', '#F5A623')};")
+
+        msg = QLabel(warnings[0])
+        msg.setStyleSheet(
+            f"font-size:12px; color:{COLORS.get('warn_text', '#F5D78E')}; background:transparent;"
+        )
+        msg.setWordWrap(True)
+        msg.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        close_btn = QPushButton("✕")
+        close_btn.setObjectName("btn_secondary")
+        close_btn.setFixedSize(24, 24)
+        close_btn.setStyleSheet(
+            f"QPushButton{{ background:transparent; color:{COLORS.get('warn_text','#F5D78E')};"
+            f"  font-size:12px; border:none; border-radius:4px; }}"
+            f"QPushButton:hover{{ background:rgba(255,255,255,0.1); }}"
+        )
+        close_btn.clicked.connect(banner.deleteLater)
+
+        lay.addWidget(icon); lay.addWidget(msg, 1); lay.addWidget(close_btn)
+
+        # Insert banner just below the header bar (index 1 in root layout)
+        root_layout = self.centralWidget().layout()
+        if root_layout:
+            root_layout.insertWidget(1, banner)
 
     def _setup_tray(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable(): return

@@ -1,8 +1,9 @@
 """
-converter.py — OmniMedia v4
-New in v4: get_media_info() for file preview (duration + type icon),
-           compute_target_bitrate() for Batch Video Compressor.
-Uses config_manager for ffmpeg path.
+converter.py — OmniMedia v4.5
+New in v4.5: check_ffmpeg_capabilities() validates version and available
+             codecs (H.265/HEVC, VP9, AV1) at startup.
+             All errors now route through the 'omnimedia.converter' logger
+             instead of silent except-pass blocks.
 """
 from __future__ import annotations
 
@@ -15,6 +16,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from config_manager import cfg  # centralised settings
+from app_logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ── FFmpeg helpers ────────────────────────────────────────────────────────────
@@ -57,6 +61,112 @@ def find_ffprobe() -> str | None:
 
 def ffmpeg_available() -> bool:
     return find_ffmpeg() is not None
+
+
+# ── FFmpeg capability check ───────────────────────────────────────────────────
+
+FFMPEG_MIN_YEAR = 2021  # builds before this are considered too old
+
+@dataclass
+class FFmpegCapabilities:
+    """Result of check_ffmpeg_capabilities()."""
+    available   : bool
+    version_str : str                    # e.g. "6.1.1"
+    year        : int | None             # build year parsed from version output
+    too_old     : bool                   # True if year < FFMPEG_MIN_YEAR
+    codecs      : dict[str, bool]        # {"hevc": True, "vp9": True, "av1": False, …}
+    warnings    : list[str]              # human-readable issues for the UI
+
+
+def check_ffmpeg_capabilities() -> FFmpegCapabilities:
+    """
+    Run 'ffmpeg -version' and 'ffmpeg -codecs' to detect the installed
+    version and whether key encoders (H.265/HEVC, VP9, AV1) are available.
+
+    Returns an FFmpegCapabilities dataclass. Never raises — all errors are
+    captured and surfaced as warnings in the result.
+    """
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return FFmpegCapabilities(
+            available=False, version_str="", year=None,
+            too_old=False, codecs={},
+            warnings=["FFmpeg not found. Conversion and compression will be disabled."],
+        )
+
+    version_str = ""
+    year: int | None = None
+    too_old = False
+    codecs: dict[str, bool] = {}
+    warnings: list[str] = []
+
+    # ── 1. Version ────────────────────────────────────────────────────────────
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-version"],
+            capture_output=True, text=True, timeout=8,
+        )
+        first_line = result.stdout.splitlines()[0] if result.stdout else ""
+        # e.g. "ffmpeg version 6.1.1 Copyright …"  or "ffmpeg version N-112053-g…"
+        m = re.search(r"version\s+([\d.N\-]+)", first_line)
+        if m:
+            version_str = m.group(1)
+        # Build year is in the copyright line: "Copyright (c) 2000-2023 …"
+        year_m = re.search(r"2000-(\d{4})", result.stdout)
+        if year_m:
+            year = int(year_m.group(1))
+            if year < FFMPEG_MIN_YEAR:
+                too_old = True
+                warnings.append(
+                    f"FFmpeg {version_str} (build year ≈ {year}) is outdated. "
+                    f"H.265 / AV1 encoding may not work correctly. "
+                    f"Please upgrade to a build from {FFMPEG_MIN_YEAR} or later."
+                )
+        logger.info("FFmpeg version: %s (year %s)", version_str, year)
+    except Exception as exc:
+        logger.warning("Could not run 'ffmpeg -version': %s", exc)
+        warnings.append(f"Could not determine FFmpeg version: {exc}")
+
+    # ── 2. Codec availability ─────────────────────────────────────────────────
+    CODEC_KEYS = {
+        "hevc"       : "H.265 / HEVC encoding",
+        "libx265"    : "H.265 (libx265)",
+        "vp9"        : "VP9 (WebM)",
+        "libvpx-vp9" : "VP9 (libvpx-vp9)",
+        "av1"        : "AV1",
+        "libaom-av1" : "AV1 (libaom)",
+        "libsvtav1"  : "AV1 (SVT-AV1, fast)",
+    }
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-codecs"],
+            capture_output=True, text=True, timeout=10,
+        )
+        output = result.stdout.lower()
+        for key in CODEC_KEYS:
+            codecs[key] = key in output
+
+        if not codecs.get("libx265") and not codecs.get("hevc"):
+            warnings.append(
+                "H.265 (HEVC) encoder not found in your FFmpeg build. "
+                "The H.265 preset will fall back to H.264."
+            )
+        if not codecs.get("libvpx-vp9") and not codecs.get("vp9"):
+            warnings.append("VP9 encoder not found — WebM output will fall back to VP8.")
+
+        logger.debug("FFmpeg codecs detected: %s", {k: v for k, v in codecs.items() if v})
+    except Exception as exc:
+        logger.warning("Could not run 'ffmpeg -codecs': %s", exc)
+        warnings.append(f"Could not query available codecs: {exc}")
+
+    return FFmpegCapabilities(
+        available=True,
+        version_str=version_str,
+        year=year,
+        too_old=too_old,
+        codecs=codecs,
+        warnings=warnings,
+    )
 
 
 # ── File classification ───────────────────────────────────────────────────────
@@ -133,7 +243,7 @@ def get_media_info(path: Path) -> MediaInfo:
                 data     = json.loads(result.stdout)
                 duration = float(data["format"]["duration"])
             except Exception:
-                pass
+                logger.debug("ffprobe failed on %s", path, exc_info=True)
 
     return MediaInfo(path=path, file_type=file_type, icon=icon, duration=duration)
 
@@ -611,6 +721,7 @@ class BatchConvertWorker(QThread):
                     idx, ok, val, src = future.result()
                 except Exception as exc:
                     i, f = futures[future]
+                    logger.error("Batch convert task failed for %s: %s", f, exc, exc_info=True)
                     self.file_error.emit(i, str(f), str(exc))
                     errors += 1
                 else:

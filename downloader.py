@@ -1,9 +1,10 @@
 """
-downloader.py — OmniMedia v4.1
+downloader.py — OmniMedia v4.5
 FIX: Smart Auto-Tagging now works correctly.
 ROOT CAUSE: quiet=True suppressed yt-dlp hooks AND metadata; the output
 path captured in _progress_hook was the pre-FFmpeg filename (e.g. .webm),
 not the final .mp3. Using postprocessor_hooks + quiet=False/noprogress=True.
+v4.5: All print() calls replaced with proper logger (app_logger).
 """
 from __future__ import annotations
 
@@ -16,6 +17,9 @@ from typing import Callable
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from config_manager import cfg, resource_path
+from app_logger import get_logger
+
+logger = get_logger(__name__)
 
 try:
     import yt_dlp
@@ -118,7 +122,7 @@ def _embed_id3_tags(filepath: Path, info: dict) -> None:
     if not MUTAGEN_AVAILABLE:
         return
     if not filepath.exists():
-        print(f"[AutoTag] File not found: {filepath}")
+        logger.warning("[AutoTag] File not found: %s", filepath)
         return
 
     try:
@@ -182,13 +186,13 @@ def _embed_id3_tags(filepath: Path, info: dict) -> None:
                     data=img_data,
                 )
             except Exception as e:
-                print(f"[AutoTag] Thumbnail download failed: {e}")
+                logger.warning("[AutoTag] Thumbnail download failed: %s", e)
 
         tags.save(str(filepath), v2_version=3)
-        print(f"[AutoTag] Tags embedded: {filepath.name}")
+        logger.info("[AutoTag] Tags embedded: %s", filepath.name)
 
     except Exception as exc:
-        print(f"[AutoTag] Could not embed tags in {filepath}: {exc}")
+        logger.error("[AutoTag] Could not embed tags in %s: %s", filepath, exc, exc_info=True)
 
 
 # ── Download Worker ───────────────────────────────────────────────────────────
@@ -231,7 +235,7 @@ class DownloadWorker(QThread):
             for f in self.output_dir.glob("*.ytdl"):
                 f.unlink(missing_ok=True)
         except Exception as exc:
-            print(f"[DownloadWorker.cleanup] {exc}")
+            logger.error("[DownloadWorker.cleanup] %s", exc)
 
     # ── yt-dlp hooks ─────────────────────────────────────────────────────────
 
@@ -337,6 +341,7 @@ class DownloadWorker(QThread):
             return
 
         try:
+            logger.info("Download started: %s [mode=%s]", self.url, self.mode)
             self.status.emit("Starting download…", "info")
             opts      = self._build_ydl_opts()
             info_dict : dict = {}
@@ -380,7 +385,7 @@ class DownloadWorker(QThread):
                     self.status.emit("🏷  Embedding ID3 tags & cover art…", "info")
                     _embed_id3_tags(mp3_path, info_dict)
                 else:
-                    print(f"[AutoTag] MP3 not found at: {mp3_path}")
+                    logger.warning("[AutoTag] MP3 not found at: %s", mp3_path)
 
             # ── History ────────────────────────────────────────────────────────
             history.add(
@@ -391,6 +396,7 @@ class DownloadWorker(QThread):
             )
 
             self.status.emit("Download complete", "ok")
+            logger.info("Download finished: %s → %s", self.url, out_path)
             self.finished.emit(True, str(out_path))
 
         except Exception as exc:
@@ -399,6 +405,7 @@ class DownloadWorker(QThread):
                 self.cleanup()
                 self.finished.emit(False, "Cancelled")
             else:
+                logger.error("Download failed: %s — %s", self.url, msg, exc_info=True)
                 self.status.emit(f"Error: {msg}", "err")
                 self.finished.emit(False, msg)
 
