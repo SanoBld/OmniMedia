@@ -24,6 +24,8 @@ from pathlib import Path
 
 block_cipher = None
 
+bundle_ffmpeg = False  # Mets True si tu veux tenter d'inclure les binaires
+
 # ── Build profile ─────────────────────────────────────────────────────────────
 
 BUNDLE_FFMPEG: bool = os.environ.get("OMNIMEDIA_BUNDLE_FFMPEG", "0").strip() == "1"
@@ -69,7 +71,7 @@ if bundle_ffmpeg:
     print("\n[OmniMedia.spec] Bundling FFmpeg...\n")
 else:
     print("\n[OmniMedia.spec] INFO: Standard build - FFmpeg NOT bundled...\n")
-    
+
 # ── Collect datas (resources) ─────────────────────────────────────────────────
 
 datas = [
