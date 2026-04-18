@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys, os, subprocess, time
 from pathlib import Path
 
-# ── Logging ───────────────────────────────
+# ── Logging (avant tout autre import OmniMedia) ───────────────────────────────
 from app_logger import setup_logging, get_logger, log_path
 setup_logging()
 logger = get_logger(__name__)
@@ -319,12 +319,24 @@ class FileProgressItem(QWidget):
         self._name.setText(name)
         self._name.setStyleSheet(f"background:transparent; color:{COLORS['success']}; font-size:12px;")
         self._bar.setValue(100)
+        self._flash()
 
     def set_error(self, err: str) -> None:
         self._status.setText("✗")
         self._status.setStyleSheet(f"color:{COLORS['danger']}; background:transparent; font-size:13px;")
         self._name.setText(err.splitlines()[0][:55])
         self._name.setStyleSheet(f"background:transparent; color:{COLORS['danger']}; font-size:12px;")
+        self._flash()
+
+    def _flash(self) -> None:
+        eff = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity", self)
+        anim.setDuration(400)
+        anim.setStartValue(0.25)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start()
 
 
 # ── Drop zone ─────────────────────────────────────────────────────────────────
@@ -459,11 +471,10 @@ class StatsBar(QFrame):
 # ── Onglets avec animation fondu ──────────────────────────────────────────────
 
 class FadingTabWidget(QTabWidget):
-    """QTabWidget avec effet de fondu entre les onglets."""
+    """QTabWidget avec fondu d'entrée sur chaque changement d'onglet."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._current_effect: QGraphicsOpacityEffect | None = None
         self._anim: QPropertyAnimation | None = None
         self.currentChanged.connect(self._on_tab_changed)
 
@@ -474,10 +485,10 @@ class FadingTabWidget(QTabWidget):
         effect = QGraphicsOpacityEffect(widget)
         widget.setGraphicsEffect(effect)
         anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(200)
+        anim.setDuration(240)
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setEasingCurve(QEasingCurve.Type.OutQuart)
         anim.finished.connect(lambda: widget.setGraphicsEffect(None))
         anim.start()
         self._anim = anim
@@ -564,8 +575,19 @@ class DownloadAdvancedPanel(QWidget):
         outer.addWidget(self.panel)
 
     def _toggle(self) -> None:
-        visible = self.panel.isVisible(); self.panel.setVisible(not visible)
+        visible = self.panel.isVisible()
+        self.panel.setVisible(not visible)
         self.toggle_btn.setText(t("adv_options_open" if not visible else "adv_options_closed"))
+        if not visible:
+            eff = QGraphicsOpacityEffect(self.panel)
+            self.panel.setGraphicsEffect(eff)
+            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim.setDuration(220)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.finished.connect(lambda: self.panel.setGraphicsEffect(None))
+            anim.start()
 
     def _pick_cookie(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select cookies.txt", str(Path.home()), "Text (*.txt);;All (*)")
@@ -626,7 +648,8 @@ class DownloadTab(QWidget):
         cl.addWidget(make_section(t("url_section")))
         url_row = QHBoxLayout(); url_row.setSpacing(10)
         self.url_input = QLineEdit(); self.url_input.setPlaceholderText(t("url_placeholder"))
-        self.url_input.setMinimumHeight(44)
+        self.url_input.setObjectName("url_input")
+        self.url_input.setMinimumHeight(48)
         paste_btn = QPushButton("📋"); paste_btn.setObjectName("btn_secondary")
         paste_btn.setFixedSize(44, 44)
         paste_btn.clicked.connect(lambda: self.url_input.setText(QApplication.clipboard().text().strip()))
@@ -783,7 +806,14 @@ class DownloadTab(QWidget):
         self._worker.start()
 
     def _on_progress(self, v: int) -> None:
-        self.progress.setValue(v); _taskbar.set_state(_WinTaskbar.TBPF_NORMAL); _taskbar.set_progress(v)
+        # Animation fluide de la barre de progression
+        anim = QPropertyAnimation(self.progress, b"value", self)
+        anim.setDuration(180)
+        anim.setStartValue(self.progress.value())
+        anim.setEndValue(v)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start()
+        _taskbar.set_state(_WinTaskbar.TBPF_NORMAL); _taskbar.set_progress(v)
 
     def _on_speed(self, speed: str) -> None:
         self._dl_speed = speed
@@ -1031,7 +1061,13 @@ class ConvertTab(QWidget):
         self._batch_worker.start()
 
     def _on_overall_progress(self, v: int) -> None:
-        self.progress.setValue(v); _taskbar.set_progress(v)
+        anim = QPropertyAnimation(self.progress, b"value", self)
+        anim.setDuration(200)
+        anim.setStartValue(self.progress.value())
+        anim.setEndValue(v)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start()
+        _taskbar.set_state(_WinTaskbar.TBPF_NORMAL); _taskbar.set_progress(v)
 
     def _on_file_progress(self, idx: int, v: int) -> None:
         if 0 <= idx < len(self._file_widgets): self._file_widgets[idx].set_progress(v)
@@ -1471,7 +1507,13 @@ class CompressorTab(QWidget):
         self._batch_worker.start()
 
     def _on_overall_progress(self, v: int) -> None:
-        self.progress.setValue(v); _taskbar.set_progress(v)
+        anim = QPropertyAnimation(self.progress, b"value", self)
+        anim.setDuration(200)
+        anim.setStartValue(self.progress.value())
+        anim.setEndValue(v)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start()
+        _taskbar.set_state(_WinTaskbar.TBPF_NORMAL); _taskbar.set_progress(v)
 
     def _on_file_progress(self, idx: int, v: int) -> None:
         if 0 <= idx < len(self._file_widgets): self._file_widgets[idx].set_progress(v)
@@ -1535,10 +1577,11 @@ class SettingsTab(QWidget):
         self._theme_btns: dict[str, QPushButton] = {}
         current_theme = ThemeManager.current()
         for key, obj_name, label in [
-            ("dark",  "theme_preview_dark",  "🌙 Sombre"),
-            ("oled",  "theme_preview_oled",  "⚫ OLED"),
-            ("light", "theme_preview_light", "☀ Clair"),
-            ("auto",  "theme_preview_auto",  "🔄 Auto"),
+            ("dark",   "theme_preview_dark",   t("theme_dark")),
+            ("oled",   "theme_preview_oled",   t("theme_oled")),
+            ("light",  "theme_preview_light",  t("theme_light")),
+            ("auto",   "theme_preview_auto",   t("theme_auto")),
+            ("system", "theme_preview_system", t("theme_system")),
         ]:
             btn = QPushButton(label); btn.setObjectName(obj_name)
             btn.setCheckable(True); btn.setChecked(key == current_theme)
@@ -1979,17 +2022,11 @@ class SettingsTab(QWidget):
         set_status(self._maint_status, t("history_cleared"), "ok")
 
     def _maint_open_log(self) -> None:
-        log_dir = Path.home() / ".omnimedia"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / "omnimedia.log"
-        # Crée le fichier s'il n'existe pas encore
-        if not log_path.exists():
-            log_path.write_text(
-                f"OmniMedia — journal d'activité\n{'─'*40}\n"
-                "(Aucun événement enregistré pour l'instant.)\n",
-                encoding="utf-8",
-            )
-        open_folder(log_path)
+        p = log_path()
+        if p.exists():
+            open_folder(p)
+        else:
+            set_status(self._maint_status, t("log_not_found"), "warn")
 
     def _maint_disable_tray(self) -> None:
         cfg.minimize_to_tray = False
@@ -2015,6 +2052,14 @@ class SettingsTab(QWidget):
     def _apply_theme(self, key: str) -> None:
         ThemeManager.apply(key)
         for k, btn in self._theme_btns.items(): btn.setChecked(k == key)
+        # Refresh system theme preview button color when system accent is applied
+        if key == "system":
+            from ui_styles import get_system_accent_color, COLORS
+            accent = get_system_accent_color()
+            if accent:
+                hint = (f"color:{accent}; font-weight:700; font-size:12px;"
+                        f"background:{COLORS['bg_card']}; border:2px solid {accent};")
+                self._theme_btns["system"].setStyleSheet(hint)
         self._update_ffmpeg_dot()
 
     def _apply_language(self, lang: str) -> None:
@@ -2247,10 +2292,19 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(icon); lay.addWidget(msg, 1); lay.addWidget(close_btn)
 
-        # Insert banner just below the header bar (index 1 in root layout)
+        # Insert banner just below la header bar (index 1 dans root layout)
         root_layout = self.centralWidget().layout()
         if root_layout:
             root_layout.insertWidget(1, banner)
+            eff = QGraphicsOpacityEffect(banner)
+            banner.setGraphicsEffect(eff)
+            anim = QPropertyAnimation(eff, b"opacity", banner)
+            anim.setDuration(400)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.finished.connect(lambda: banner.setGraphicsEffect(None))
+            anim.start()
 
     def _setup_tray(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable(): return
