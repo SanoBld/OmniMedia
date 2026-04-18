@@ -28,32 +28,33 @@ def resource_path(relative: str | Path) -> Path:
 _DEFAULTS: dict[str, Any] = {
     "language"           : "fr",
     "theme"              : "dark",
-    "accent_color"       : "blue",        # blue | purple | green | pink
-    "window_opacity"     : 100,           # 70–100 %
     "download_dir"       : str(Path.home() / "Downloads" / "OmniMedia"),
-    "auto_subfolders"    : False,         # create sub-folder per playlist/artist
+    "auto_subfolders"    : False,
     "file_naming"        : "title",       # "title" | "artist_title"
     "ffmpeg_path"        : "",
     "ffmpeg_threads"     : 0,             # 0 = auto
     "ffmpeg_priority"    : "normal",      # "low" | "normal" | "high"
-    "delete_source"      : False,         # delete source file after conversion
+    "delete_source"      : False,
     "max_workers"        : 3,
-    "preferred_quality"  : "best",        # best | 4k | 1080p | 720p | 480p
+    "preferred_quality"  : "best",        # best | 2160 | 1080 | 720 | 480
     "browser_cookies"    : "",            # chrome | firefox | edge | brave | opera | ""
-    # ── Notifications (global + granular) ──────────────────────────────────
-    "notifications"      : True,          # master switch
-    "notif_on_download"  : True,          # notify when download finishes
-    "notif_on_convert"   : True,          # notify when conversion/compression finishes
-    "notif_on_error"     : True,          # notify on errors
-    "notif_sound"        : False,         # play sound (Windows/macOS only)
-    "notif_tray_bg"      : True,          # notify when app moves to tray
-    # ── Other options ──────────────────────────────────────────────────────
+    # ── Notifications ──────────────────────────────────────────────────────
+    "notifications"      : True,
+    "notif_on_download"  : True,
+    "notif_on_convert"   : True,
+    "notif_on_error"     : True,
+    "notif_sound"        : False,
+    "notif_tray_bg"      : True,
+    # ── Interface ──────────────────────────────────────────────────────────
+    "animations_enabled" : True,          # active les transitions et animations UI
+    "ignore_errors"      : True,          # playlist : continuer même en cas d'erreur
+    # ── Other ──────────────────────────────────────────────────────────────
     "embed_thumbnail"    : True,
     "auto_tag"           : True,
     "playlist_mode"      : False,
     "compress_target"    : "",
-    "minimize_to_tray"   : False,         # close → tray instead of quit
-    "start_in_tray"      : False,         # start minimized to tray
+    "minimize_to_tray"   : False,
+    "start_in_tray"      : False,
 }
 
 
@@ -120,19 +121,7 @@ class ConfigManager:
     @ffmpeg_path.setter
     def ffmpeg_path(self, v: str) -> None: self.set("ffmpeg_path", v)
 
-    # ── Appearance ────────────────────────────────────────────────────────────
-
-    @property
-    def accent_color(self) -> str: return self._data.get("accent_color", "blue")
-    @accent_color.setter
-    def accent_color(self, v: str) -> None: self.set("accent_color", v)
-
-    @property
-    def window_opacity(self) -> int: return int(self._data.get("window_opacity", 100))
-    @window_opacity.setter
-    def window_opacity(self, v: int) -> None: self.set("window_opacity", max(70, min(v, 100)))
-
-    # ── Destinations & Organisation ───────────────────────────────────────────
+    # ── Apparence / Interface ─────────────────────────────────────────────────
 
     @property
     def auto_subfolders(self) -> bool: return bool(self._data.get("auto_subfolders", False))
@@ -216,6 +205,11 @@ class ConfigManager:
     def notif_tray_bg(self) -> bool: return bool(self._data.get("notif_tray_bg", True))
     @notif_tray_bg.setter
     def notif_tray_bg(self, v: bool) -> None: self.set("notif_tray_bg", v)
+
+    @property
+    def animations_enabled(self) -> bool: return bool(self._data.get("animations_enabled", True))
+    @animations_enabled.setter
+    def animations_enabled(self, v: bool) -> None: self.set("animations_enabled", v)
 
     # ── Features ──────────────────────────────────────────────────────────────
 

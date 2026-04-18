@@ -215,9 +215,9 @@ QTabWidget::pane {{ border:none; background:{c['bg_deep']}; top:0; }}
 QTabBar {{ background:{c['bg_card']}; border-bottom:1px solid {c['border_soft']}; }}
 QTabBar::tab {{
     background:transparent; color:{c['text_muted']};
-    padding:14px 30px; margin:0;
-    font-size:13px; font-weight:500; letter-spacing:0.2px;
-    border-bottom:2px solid transparent; min-width:88px;
+    padding:14px 28px; margin:0;
+    font-size:13px; font-weight:500; letter-spacing:0.3px;
+    border-bottom:2px solid transparent; min-width:96px;
 }}
 QTabBar::tab:selected {{
     color:{c['accent_light']}; border-bottom:2px solid {c['accent']};
@@ -234,13 +234,19 @@ QTabBar::tab:disabled {{
 
 /* ── Cartes ──────────────────────────────────────────────────────────── */
 QFrame#card {{
-    background:{c['bg_card']}; border:1px solid {c['border']}; border-radius:16px;
+    background:{c['bg_card']};
+    border:1px solid {c['border']};
+    border-bottom:2px solid {c['border_soft']};
+    border-radius:16px;
 }}
 QFrame#card_inner {{
     background:{c['bg_panel']}; border:1px solid {c['border']}; border-radius:12px;
 }}
 QFrame#settings_card {{
-    background:{c['bg_card']}; border:1px solid {c['border']}; border-radius:16px;
+    background:{c['bg_card']};
+    border:1px solid {c['border']};
+    border-bottom:2px solid {c['border_soft']};
+    border-radius:16px;
 }}
 QFrame#settings_card_accent {{
     background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
@@ -544,6 +550,36 @@ QLabel#stat_label {{
     font-size:10px; font-weight:600; color:{c['text_muted']};
     background:transparent; letter-spacing:0.6px;
 }}
+/* ── Bouton options avancées ────────────────────────────────────────────── */
+QPushButton#btn_advanced {{
+    background:transparent;
+    color:{c['text_muted']};
+    border:1.5px solid {c['border_soft']};
+    border-radius:8px;
+    padding:6px 16px;
+    font-size:12px;
+    font-weight:500;
+    text-align:left;
+}}
+QPushButton#btn_advanced:hover {{
+    background:{c['bg_hover']};
+    color:{c['text_secondary']};
+    border-color:{c['accent']};
+}}
+QPushButton#btn_advanced:checked {{
+    color:{c['accent_light']};
+    border-color:{c['accent']};
+    background:{c['accent_glow']};
+}}
+
+/* ── Panneau options avancées ───────────────────────────────────────────── */
+QFrame#advanced_panel {{
+    background:{c['bg_panel']};
+    border:1px solid {c['border']};
+    border-radius:14px;
+    margin-top:4px;
+}}
+
 """
 
 
@@ -565,7 +601,7 @@ def badge_style(kind: str = "info") -> str:
 
 def section_label_style() -> str:
     return (f"font-size:10px; font-weight:700; color:{COLORS['text_muted']}; "
-            f"letter-spacing:1.2px; background:transparent;")
+            f"letter-spacing:1.4px; background:transparent; margin-bottom:2px;")
 
 
 def card_title_style() -> str:

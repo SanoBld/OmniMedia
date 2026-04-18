@@ -65,6 +65,7 @@ class AdvancedOptions:
     cookies_file:    str  = ""
     browser_cookies: str  = ""
     embed_thumbnail: bool = True
+    ignore_errors:   bool = True   # Playlist : continuer même en cas d'erreur sur un élément
 
 
 # ── Download History ──────────────────────────────────────────────────────────
@@ -198,11 +199,12 @@ def _embed_id3_tags(filepath: Path, info: dict) -> None:
 # ── Download Worker ───────────────────────────────────────────────────────────
 
 class DownloadWorker(QThread):
-    progress = pyqtSignal(int)
-    speed    = pyqtSignal(str)
-    eta      = pyqtSignal(str)
-    status   = pyqtSignal(str, str)   # (message, level)
-    finished = pyqtSignal(bool, str)  # (success, output_path)
+    progress      = pyqtSignal(int)
+    speed         = pyqtSignal(str)
+    eta           = pyqtSignal(str)
+    status        = pyqtSignal(str, str)          # (message, level)
+    item_error    = pyqtSignal(str, str)          # (title, error_msg) — erreur sur un élément playlist
+    finished      = pyqtSignal(bool, str)         # (success, output_path ou rapport)
 
     def __init__(
         self,
@@ -222,8 +224,9 @@ class DownloadWorker(QThread):
         self.playlist_mode = playlist_mode
         self.auto_tag      = auto_tag
         self._cancelled    = False
-        self._output_path  = ""          # set by progress hook (pre-FFmpeg)
-        self._final_mp3    = ""          # set by postprocessor hook (post-FFmpeg)
+        self._output_path  = ""
+        self._final_mp3    = ""
+        self._errors: list[dict] = []   # [{title, url, error}] collectés en mode ignore_errors
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -237,7 +240,18 @@ class DownloadWorker(QThread):
         except Exception as exc:
             logger.error("[DownloadWorker.cleanup] %s", exc)
 
-    # ── yt-dlp hooks ─────────────────────────────────────────────────────────
+# ── yt-dlp hooks ─────────────────────────────────────────────────────────
+
+    def _error_hook(self, d: dict) -> None:
+        """
+        Appelé par yt-dlp pour chaque erreur en mode ignoreerrors=True.
+        """
+        info  = d.get("info_dict", {})
+        title = info.get("title") or info.get("id") or "?"
+        error = d.get("error", "Unknown error")
+        self._errors.append({"title": title, "error": str(error)})
+        self.item_error.emit(title, str(error))
+        logger.warning("Playlist item skipped: %s — %s", title, error)
 
     def _progress_hook(self, d: dict) -> None:
         """Called during download — tracks progress and pre-FFmpeg filename."""
@@ -246,26 +260,26 @@ class DownloadWorker(QThread):
 
         s = d.get("status", "")
         if s == "downloading":
+            # On nettoie la chaîne de pourcentage (ex: " 45.2%")
             pct_raw = d.get("_percent_str", "0%").strip().rstrip("%")
             try:
                 self.progress.emit(int(float(pct_raw)))
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
+            
             self.speed.emit(d.get("_speed_str", "").strip())
             self.eta.emit(d.get("_eta_str", "").strip())
+            
         elif s == "finished":
-            # This is the pre-postprocessor filename (e.g. .webm / .m4a)
+            # Chemin temporaire avant conversion
             self._output_path = d.get("filename", "")
 
     def _postprocessor_hook(self, d: dict) -> None:
         """
-        FIX v4.1 — Called AFTER each postprocessor completes.
-        For FFmpegExtractAudio, this gives us the real .mp3 path.
-        d["status"] == "finished" means the postprocessor is done.
-        d["info_dict"]["filepath"] is the final output file path.
+        Appelé APRÈS chaque post-processeur (ex: FFmpeg).
+        C'est ici qu'on récupère le chemin final du fichier .mp3.
         """
         if d.get("status") == "finished":
-            # "filepath" is set by yt-dlp after the postprocessor writes the file
             fp = (
                 d.get("info_dict", {}).get("filepath")
                 or d.get("filename", "")
@@ -292,18 +306,22 @@ class DownloadWorker(QThread):
                 ffmpeg_loc = str(candidate)
 
         opts: dict = {
-            "outtmpl"          : out_template,
-            "progress_hooks"   : [self._progress_hook],
-            "postprocessor_hooks": [self._postprocessor_hook],  # FIX: capture final path
-            "noplaylist"       : not self.playlist_mode,
-            # ── FIX: quiet=True suppressed progress hooks in some yt-dlp versions
-            # and prevented the info_dict from being fully populated.
-            # noprogress=True hides console output WITHOUT breaking Python hooks.
-            "quiet"            : False,
-            "noprogress"       : True,
-            "no_warnings"      : True,
-            "restrictfilenames": True,
+            "outtmpl"            : out_template,
+            "progress_hooks"     : [self._progress_hook],
+            "postprocessor_hooks": [self._postprocessor_hook],
+            "noplaylist"         : not self.playlist_mode,
+            "quiet"              : False,
+            "noprogress"         : True,
+            "no_warnings"        : True,
+            "restrictfilenames"  : True,
         }
+
+        # ── Mode tolérant aux erreurs (playlist) ──────────────────────────────
+        # ignoreerrors=True → yt-dlp zap les éléments indisponibles et continue.
+        # On capture les erreurs via le hook pour les afficher en fin de téléchargement.
+        if self.playlist_mode and self.options.ignore_errors:
+            opts["ignoreerrors"] = True
+            opts["error_hooks"]  = [self._error_hook]
 
         if ffmpeg_loc:
             opts["ffmpeg_location"] = ffmpeg_loc
@@ -397,7 +415,20 @@ class DownloadWorker(QThread):
 
             self.status.emit("Download complete", "ok")
             logger.info("Download finished: %s → %s", self.url, out_path)
-            self.finished.emit(True, str(out_path))
+
+            # ── Rapport d'erreurs playlist ─────────────────────────────────────
+            if self._errors:
+                n = len(self._errors)
+                report = (
+                    f"✔  Téléchargement terminé — {n} élément(s) ignoré(s) :\n"
+                    + "\n".join(
+                        f"  • {e['title']}: {e['error'][:80]}"
+                        for e in self._errors
+                    )
+                )
+                self.finished.emit(True, report)
+            else:
+                self.finished.emit(True, str(out_path))
 
         except Exception as exc:
             msg = str(exc)

@@ -1,9 +1,15 @@
 """
-main.py — OmniMedia v4.5  (UI Premium — Redesign)
+main.py — OmniMedia v4.5
 Nouveautés vs v4.4 :
   - setup_logging() appelé au lancement → logs dans ~/.omnimedia/logs/app.log
   - check_ffmpeg_capabilities() au démarrage + bandeau d'avertissement si H.265 absent
   - Speed / ETA du worker téléchargement affichés dans DownloadTab
+v4.5 :
+  - AnimatedToggle : toggle pill custom avec knob animé
+  - SVG icons via icons.py dans la TabBar et les cartes
+  - Bug double onglet Paramètres corrigé
+  - Section accent/opacité supprimée de Settings
+  - Option "désactiver les animations" dans Settings
 """
 from __future__ import annotations
 
@@ -39,9 +45,10 @@ def _check_dependencies() -> None:
 _check_dependencies()
 # ─────────────────────────────────────────────────────────────────────────────
 
-from PyQt6.QtCore    import (QThread, pyqtSignal, Qt, QTimer,
+from PyQt6.QtCore    import (QThread, pyqtSignal, Qt, QTimer, QSize, QPoint,
                               QPropertyAnimation, QEasingCurve, pyqtProperty)
-from PyQt6.QtGui     import QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap, QPainter
+from PyQt6.QtGui     import (QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap,
+                              QPainter, QPainterPath)
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QRadioButton, QButtonGroup,
@@ -50,6 +57,8 @@ from PyQt6.QtWidgets import (
     QScrollArea, QSystemTrayIcon, QMenu, QCheckBox, QSpinBox,
     QGraphicsOpacityEffect,
 )
+
+from icons import icon as svg_icon
 
 from config_manager import cfg, resource_path
 from i18n           import t, set_language, current_language
@@ -214,13 +223,120 @@ def _can_notify(event: str) -> bool:
     if event == "error":     return cfg.notif_on_error
     return True
 
-def make_toggle(label: str, checked: bool, callback) -> QCheckBox:
-    """Crée un QCheckBox stylisé en toggle switch."""
-    cb = QCheckBox(label)
-    cb.setObjectName("toggle_switch")
-    cb.setChecked(checked)
-    cb.toggled.connect(callback)
-    return cb
+def make_toggle(label: str, checked: bool, callback) -> "AnimatedToggle":
+    """Compatibilité — redirige vers AnimatedToggle."""
+    tog = AnimatedToggle(label)
+    tog.setChecked(checked)
+    tog.toggled.connect(callback)
+    return tog
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  AnimatedToggle — toggle pill custom avec knob animé
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AnimatedToggle(QCheckBox):
+    """
+    Toggle switch avec knob circulaire animé.
+    Utilise pyqtProperty + QPropertyAnimation pour une compatibilité PyQt6 garantie.
+    Respecte cfg.animations_enabled.
+    """
+    _TW, _TH = 46, 26   # track width / height
+    _KR       = 10       # knob radius
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(text, parent)
+        self._knob_pos: float = 1.0 if self.isChecked() else 0.0
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(max(32, self._TH + 6))
+        # Pas de stateChanged — toggled est le signal correct et non déprécié
+        self.toggled.connect(self._on_toggled)
+
+    # ── pyqtProperty float pour QPropertyAnimation ────────────────────────────
+
+    def _get_knob_pos(self) -> float:
+        return self._knob_pos
+
+    def _set_knob_pos(self, v: float) -> None:
+        self._knob_pos = float(v)
+        self.update()
+
+    knob_pos = pyqtProperty(float, _get_knob_pos, _set_knob_pos)
+
+    # ── Animation ─────────────────────────────────────────────────────────────
+
+    def _on_toggled(self, checked: bool) -> None:
+        target = 1.0 if checked else 0.0
+        if cfg.animations_enabled:
+            anim = QPropertyAnimation(self, b"knob_pos", self)
+            anim.setDuration(180)
+            anim.setStartValue(self._knob_pos)
+            anim.setEndValue(target)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.start()
+        else:
+            self._knob_pos = target
+            self.update()
+
+    # ── Taille ────────────────────────────────────────────────────────────────
+
+    def sizeHint(self) -> QSize:
+        sh = super().sizeHint()
+        return QSize(sh.width() + self._TW + 14, max(sh.height(), self._TH + 8))
+
+    # ── Rendu ─────────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _) -> None:  # type: ignore[override]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        tw, th = self._TW, self._TH
+        ty = (self.height() - th) // 2
+
+        # ── Track (couleur interpolée off→on) ─────────────────────────────
+        off_c = QColor(COLORS.get("border_soft", "#242E4C"))
+        on_c  = QColor(COLORS.get("accent",      "#3B7DF8"))
+        t = max(0.0, min(1.0, self._knob_pos))
+        tr = int(off_c.red()   + (on_c.red()   - off_c.red())   * t)
+        tg = int(off_c.green() + (on_c.green() - off_c.green()) * t)
+        tb = int(off_c.blue()  + (on_c.blue()  - off_c.blue())  * t)
+
+        track = QPainterPath()
+        track.addRoundedRect(0.0, float(ty), float(tw), float(th), th / 2.0, th / 2.0)
+        p.fillPath(track, QColor(tr, tg, tb))
+
+        # ── Knob ──────────────────────────────────────────────────────────
+        margin = 3
+        kr = float(self._KR)  # Force en float
+        travel = float(tw - 2 * margin - 2 * kr)
+        kx = float(margin + kr + travel * self._knob_pos)
+        ky = float(ty + th / 2.0)
+
+        # Shadow subtile (CORRIGÉ)
+        shadow = QPainterPath()
+        # On passe les arguments (x, y, rx, ry) directement en float
+        shadow.addEllipse(kx, ky + 1.0, kr, kr)
+        p.fillPath(shadow, QColor(0, 0, 0, 35))
+
+        # Knob blanc (CORRIGÉ)
+        knob = QPainterPath()
+        # On passe les arguments (x, y, rx, ry) directement en float
+        knob.addEllipse(kx, ky, kr, kr)
+        p.fillPath(knob, QColor("#FFFFFF"))
+
+        # ── Label ─────────────────────────────────────────────────────────
+        if self.text():
+            col = QColor(COLORS.get("text_primary" if self.isEnabled() else "text_muted",
+                                    "#E2EAF8"))
+            p.setPen(col)
+            font = self.font(); font.setPixelSize(13); p.setFont(font)
+            p.drawText(
+                self.rect().adjusted(tw + 14, 0, 0, 0),
+                Qt.AlignmentFlag.AlignVCenter,
+                self.text(),
+            )
+
+        p.end()
 
 def make_card(icon: str, title: str) -> tuple[QFrame, QHBoxLayout, QVBoxLayout]:
     """
@@ -329,6 +445,8 @@ class FileProgressItem(QWidget):
         self._flash()
 
     def _flash(self) -> None:
+        if not cfg.animations_enabled:
+            return
         eff = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(eff)
         anim = QPropertyAnimation(eff, b"opacity", self)
@@ -482,6 +600,8 @@ class FadingTabWidget(QTabWidget):
         widget = self.widget(index)
         if widget is None:
             return
+        if not cfg.animations_enabled:
+            return
         effect = QGraphicsOpacityEffect(widget)
         widget.setGraphicsEffect(effect)
         anim = QPropertyAnimation(effect, b"opacity", self)
@@ -537,8 +657,23 @@ class DownloadAdvancedPanel(QWidget):
         self.playlist_input = QLineEdit(); self.playlist_input.setPlaceholderText(t("playlist_placeholder"))
         row2.addWidget(self.playlist_input); pl.addLayout(row2)
 
-        self.playlist_mode_cb = QCheckBox(t("playlist_mode"))
-        self.playlist_mode_cb.setChecked(cfg.playlist_mode); pl.addWidget(self.playlist_mode_cb)
+        self.playlist_mode_cb = make_toggle(t("playlist_mode"), cfg.playlist_mode, self._on_playlist_mode_changed)
+        pl.addWidget(self.playlist_mode_cb)
+
+        # Indentation visuelle — options spécifiques aux playlists
+        self._playlist_opts = QWidget()
+        plo = QVBoxLayout(self._playlist_opts)
+        plo.setContentsMargins(18, 0, 0, 0); plo.setSpacing(6)
+        self.ignore_errors_cb = make_toggle(
+            "Continuer si une vidéo est indisponible  (recommandé pour les playlists)",
+            cfg.get("ignore_errors", True),
+            lambda v: cfg.set("ignore_errors", v),
+        )
+        plo.addWidget(self.ignore_errors_cb)
+        err_hint = QLabel("Les erreurs seront listées à la fin du téléchargement.")
+        err_hint.setObjectName("subtitle"); plo.addWidget(err_hint)
+        self._playlist_opts.setVisible(cfg.playlist_mode)
+        pl.addWidget(self._playlist_opts)
 
         row3 = QVBoxLayout(); row3.setSpacing(8)
         row3.addWidget(make_section(t("cookies_file")))
@@ -564,21 +699,26 @@ class DownloadAdvancedPanel(QWidget):
         browser_row.addWidget(self.browser_status, 1)
         row4.addLayout(browser_row); pl.addLayout(row4)
 
-        self.embed_thumb_cb = QCheckBox(t("embed_thumbnail"))
-        self.embed_thumb_cb.setChecked(cfg.get("embed_thumbnail", True))
-        self.embed_thumb_cb.setEnabled(MUTAGEN_AVAILABLE); pl.addWidget(self.embed_thumb_cb)
+        self.embed_thumb_cb = make_toggle(t("embed_thumbnail"), cfg.get("embed_thumbnail", True), lambda v: cfg.set("embed_thumbnail", v))
+        self.embed_thumb_cb.setEnabled(MUTAGEN_AVAILABLE)
+        pl.addWidget(self.embed_thumb_cb)
 
-        self.auto_tag_cb = QCheckBox(t("auto_tag"))
-        self.auto_tag_cb.setChecked(cfg.auto_tag); self.auto_tag_cb.setEnabled(MUTAGEN_AVAILABLE)
-        self.auto_tag_cb.setToolTip("Requires mutagen — pip install mutagen"); pl.addWidget(self.auto_tag_cb)
+        self.auto_tag_cb = make_toggle(t("auto_tag"), cfg.auto_tag, lambda v: setattr(cfg, "auto_tag", v))
+        self.auto_tag_cb.setEnabled(MUTAGEN_AVAILABLE)
+        self.auto_tag_cb.setToolTip("Requiert mutagen — pip install mutagen")
+        pl.addWidget(self.auto_tag_cb)
 
         outer.addWidget(self.panel)
+
+    def _on_playlist_mode_changed(self, enabled: bool) -> None:
+        cfg.playlist_mode = enabled
+        self._playlist_opts.setVisible(enabled)
 
     def _toggle(self) -> None:
         visible = self.panel.isVisible()
         self.panel.setVisible(not visible)
         self.toggle_btn.setText(t("adv_options_open" if not visible else "adv_options_closed"))
-        if not visible:
+        if not visible and cfg.animations_enabled:
             eff = QGraphicsOpacityEffect(self.panel)
             self.panel.setGraphicsEffect(eff)
             anim = QPropertyAnimation(eff, b"opacity", self)
@@ -608,11 +748,14 @@ class DownloadAdvancedPanel(QWidget):
 
     def get_options(self) -> AdvancedOptions:
         return AdvancedOptions(
-            audio_bitrate=self.bitrate_combo.currentData(), video_codec="h264",
-            max_resolution=self.res_combo.currentData(),
-            playlist_items=self.playlist_input.text().strip(),
-            cookies_file=self._cookies_path, browser_cookies="",
-            embed_thumbnail=self.embed_thumb_cb.isChecked(),
+            audio_bitrate   = self.bitrate_combo.currentData(),
+            video_codec     = "h264",
+            max_resolution  = self.res_combo.currentData(),
+            playlist_items  = self.playlist_input.text().strip(),
+            cookies_file    = self._cookies_path,
+            browser_cookies = "",
+            embed_thumbnail = self.embed_thumb_cb.isChecked(),
+            ignore_errors   = self.ignore_errors_cb.isChecked(),
         )
 
     def playlist_mode_enabled(self) -> bool: return self.playlist_mode_cb.isChecked()
@@ -801,18 +944,21 @@ class DownloadTab(QWidget):
         self._worker.progress.connect(self._on_progress)
         self._worker.speed.connect(self._on_speed)
         self._worker.eta.connect(self._on_eta)
+        self._worker.item_error.connect(self._on_item_error)
         self._worker.status.connect(lambda msg, _=None: self.status_lbl.setText(msg))
         self._worker.finished.connect(self._on_finished)
         self._worker.start()
 
     def _on_progress(self, v: int) -> None:
-        # Animation fluide de la barre de progression
-        anim = QPropertyAnimation(self.progress, b"value", self)
-        anim.setDuration(180)
-        anim.setStartValue(self.progress.value())
-        anim.setEndValue(v)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
+        if cfg.animations_enabled:
+            anim = QPropertyAnimation(self.progress, b"value", self)
+            anim.setDuration(180)
+            anim.setStartValue(self.progress.value())
+            anim.setEndValue(v)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.start()
+        else:
+            self.progress.setValue(v)
         _taskbar.set_state(_WinTaskbar.TBPF_NORMAL); _taskbar.set_progress(v)
 
     def _on_speed(self, speed: str) -> None:
@@ -822,6 +968,16 @@ class DownloadTab(QWidget):
     def _on_eta(self, eta: str) -> None:
         self._dl_eta = eta
         self._refresh_speed_eta()
+
+    def _on_item_error(self, title: str, error: str) -> None:
+        """Un élément de playlist a été ignoré — on le marque dans la file."""
+        short_title = title[:50] + "…" if len(title) > 50 else title
+        short_err   = error[:60]  + "…" if len(error) > 60 else error
+        # Ajouter l'entrée dans la file d'attente avec statut erreur
+        item = QListWidgetItem(f"⚠  {short_title}  —  {short_err}")
+        item.setForeground(QColor(COLORS.get("warning", "#F5A623")))
+        self.queue_list.addItem(item)
+        self.queue_list.scrollToBottom()
 
     def _refresh_speed_eta(self) -> None:
         speed = getattr(self, "_dl_speed", "")
@@ -1061,12 +1217,15 @@ class ConvertTab(QWidget):
         self._batch_worker.start()
 
     def _on_overall_progress(self, v: int) -> None:
-        anim = QPropertyAnimation(self.progress, b"value", self)
-        anim.setDuration(200)
-        anim.setStartValue(self.progress.value())
-        anim.setEndValue(v)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
+        if cfg.animations_enabled:
+            anim = QPropertyAnimation(self.progress, b"value", self)
+            anim.setDuration(200)
+            anim.setStartValue(self.progress.value())
+            anim.setEndValue(v)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.start()
+        else:
+            self.progress.setValue(v)
         _taskbar.set_state(_WinTaskbar.TBPF_NORMAL); _taskbar.set_progress(v)
 
     def _on_file_progress(self, idx: int, v: int) -> None:
@@ -1507,12 +1666,15 @@ class CompressorTab(QWidget):
         self._batch_worker.start()
 
     def _on_overall_progress(self, v: int) -> None:
-        anim = QPropertyAnimation(self.progress, b"value", self)
-        anim.setDuration(200)
-        anim.setStartValue(self.progress.value())
-        anim.setEndValue(v)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
+        if cfg.animations_enabled:
+            anim = QPropertyAnimation(self.progress, b"value", self)
+            anim.setDuration(200)
+            anim.setStartValue(self.progress.value())
+            anim.setEndValue(v)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.start()
+        else:
+            self.progress.setValue(v)
         _taskbar.set_state(_WinTaskbar.TBPF_NORMAL); _taskbar.set_progress(v)
 
     def _on_file_progress(self, idx: int, v: int) -> None:
@@ -1558,22 +1720,27 @@ class SettingsTab(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:  # noqa: C901
-        from PyQt6.QtWidgets import QSlider
         root = _make_scroll_tab(self)
 
         # ── En-tête ──────────────────────────────────────────────────────────
-        hdr = QHBoxLayout()
-        ic = QLabel("⚙"); ic.setStyleSheet("font-size:24px; background:transparent;")
-        hdr.addWidget(ic); hdr.addWidget(make_label(t("settings_title"), "title")); hdr.addStretch()
+        hdr = QHBoxLayout(); hdr.setSpacing(14)
+        ic_lbl = QLabel()
+        ic_lbl.setPixmap(svg_icon("settings", color=COLORS.get("accent","#3B7DF8"), size=26).pixmap(QSize(26,26)))
+        ic_lbl.setStyleSheet("background:transparent;")
+        hdr.addWidget(ic_lbl)
+        hdr.addWidget(make_label(t("settings_title"), "title"))
+        hdr.addStretch()
         root.addLayout(hdr)
+        root.addSpacing(8)
 
         # ══════════════════════════════════════════════════════════════════════
         # CARTE 1 : Apparence & Interface
         # ══════════════════════════════════════════════════════════════════════
         app_card, _, app_content = make_card("🎨", t("appearance_card_title"))
 
+        # ── Thème ─────────────────────────────────────────────────────────
         app_content.addWidget(make_section("THÈME VISUEL"))
-        theme_row = QHBoxLayout(); theme_row.setSpacing(10)
+        theme_row = QHBoxLayout(); theme_row.setSpacing(8)
         self._theme_btns: dict[str, QPushButton] = {}
         current_theme = ThemeManager.current()
         for key, obj_name, label in [
@@ -1591,34 +1758,11 @@ class SettingsTab(QWidget):
         theme_desc = QLabel(t("theme_desc")); theme_desc.setObjectName("subtitle")
         app_content.addWidget(theme_desc)
 
-        app_content.addSpacing(12)
-        app_content.addWidget(make_section(t("accent_color_label")))
-        accent_row = QHBoxLayout(); accent_row.setSpacing(10)
-        self._accent_btns: dict[str, QPushButton] = {}
-        cur_accent = cfg.accent_color
-        for key, label in [("blue", t("accent_blue")), ("purple", t("accent_purple")),
-                            ("green", t("accent_green")), ("pink", t("accent_pink"))]:
-            btn = QPushButton(label); btn.setObjectName("theme_btn"); btn.setCheckable(True)
-            btn.setChecked(key == cur_accent); btn.setFixedHeight(36)
-            btn.clicked.connect(lambda _, k=key: self._apply_accent(k))
-            self._accent_btns[key] = btn; accent_row.addWidget(btn)
-        accent_row.addStretch(); app_content.addLayout(accent_row)
+        app_content.addSpacing(16)
 
-        app_content.addSpacing(12)
-        app_content.addWidget(make_section(t("opacity_label")))
-        opacity_row = QHBoxLayout(); opacity_row.setSpacing(12)
-        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self._opacity_slider.setRange(70, 100); self._opacity_slider.setValue(cfg.window_opacity)
-        self._opacity_slider.setFixedWidth(200)
-        self._opacity_lbl = QLabel(f"{cfg.window_opacity} %")
-        self._opacity_lbl.setObjectName("status_info"); self._opacity_lbl.setFixedWidth(44)
-        self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
-        opacity_row.addWidget(self._opacity_slider); opacity_row.addWidget(self._opacity_lbl)
-        opacity_row.addStretch(); app_content.addLayout(opacity_row)
-
-        app_content.addSpacing(12)
+        # ── Langue ────────────────────────────────────────────────────────
         app_content.addWidget(make_section("LANGUE"))
-        lang_row = QHBoxLayout(); lang_row.setSpacing(10)
+        lang_row = QHBoxLayout(); lang_row.setSpacing(8)
         self._lang_btns: dict[str, QPushButton] = {}
         cur_lang = current_language()
         for label, key in [(t("lang_en"), "en"), (t("lang_fr"), "fr")]:
@@ -1627,8 +1771,22 @@ class SettingsTab(QWidget):
             btn.clicked.connect(lambda _, k=key: self._apply_language(k))
             self._lang_btns[key] = btn; lang_row.addWidget(btn)
         lang_row.addStretch(); app_content.addLayout(lang_row)
-        restart_lbl = QLabel("⚠  Le changement de langue s'applique après redémarrage.")
-        restart_lbl.setObjectName("subtitle"); app_content.addWidget(restart_lbl)
+        restart_lbl = QLabel("Le changement de langue s'applique après redémarrage de l'application.")
+        restart_lbl.setObjectName("subtitle"); restart_lbl.setWordWrap(True)
+        app_content.addWidget(restart_lbl)
+
+        app_content.addSpacing(16)
+
+        # ── Animations ────────────────────────────────────────────────────
+        app_content.addWidget(make_section("INTERFACE"))
+        self._anim_toggle = make_toggle(
+            "Activer les transitions et animations",
+            cfg.animations_enabled,
+            self._on_anim_toggled,
+        )
+        app_content.addWidget(self._anim_toggle)
+        anim_hint = QLabel("Désactivez si l'application est lente sur votre PC.")
+        anim_hint.setObjectName("subtitle"); app_content.addWidget(anim_hint)
 
         root.addWidget(app_card)
 
@@ -1999,14 +2157,13 @@ class SettingsTab(QWidget):
             win._tray.show()
 
     def _apply_accent(self, key: str) -> None:
-        cfg.accent_color = key
-        for k, btn in self._accent_btns.items(): btn.setChecked(k == key)
+        pass  # supprimé — l'accent vient du thème système ou du thème sélectionné
 
     def _on_opacity_changed(self, value: int) -> None:
-        cfg.window_opacity = value
-        self._opacity_lbl.setText(f"{value} %")
-        win = self.window()
-        if win: win.setWindowOpacity(value / 100.0)
+        pass  # supprimé — opacité fixée à 100 %
+
+    def _on_anim_toggled(self, enabled: bool) -> None:
+        cfg.animations_enabled = enabled
 
     def _choose_output_dir(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Dossier de sortie par défaut")
@@ -2185,10 +2342,6 @@ class MainWindow(QMainWindow):
         self._tray: QSystemTrayIcon | None = None
         self._settings_tab: SettingsTab | None = None
         self._setup_ui(); self._setup_tray(); self._attach_taskbar(); self._check_github_version()
-        if cfg.window_opacity < 100:
-            self.setWindowOpacity(cfg.window_opacity / 100.0)
-        # Deferred FFmpeg check — runs after the event loop starts so the window
-        # is fully visible before any dialog/banner appears.
         QTimer.singleShot(400, self._check_ffmpeg)
 
     def _setup_ui(self) -> None:
@@ -2213,11 +2366,22 @@ class MainWindow(QMainWindow):
         self._comp_tab     = CompressorTab()
         self._settings_tab = SettingsTab()
 
-        self.tabs.addTab(self._dl_tab,   t("tab_download"))
-        self.tabs.addTab(self._conv_tab, t("tab_convert"))
-        self.tabs.addTab(self._comp_tab, "  📦  Compresser")
-        self.tabs.addTab(self._settings_tab, t("tab_settings"))
-        self.tabs.setTabVisible(3, False)  # Paramètres masqué, accès via bouton
+        self.tabs.addTab(self._dl_tab,       "  Télécharger  ")
+        self.tabs.addTab(self._conv_tab,     "  Convertir    ")
+        self.tabs.addTab(self._comp_tab,     "  Compresser   ")
+        self.tabs.addTab(self._settings_tab, "  Paramètres   ")
+
+        # Icônes SVG dans la barre d'onglets
+        _tab_icons = [
+            ("download", 0), ("convert", 1), ("compress", 2), ("settings", 3),
+        ]
+        _ic_color = COLORS.get("text_secondary", "#8A96B8")
+        for icon_name, idx in _tab_icons:
+            self.tabs.setTabIcon(idx, svg_icon(icon_name, color=_ic_color, size=16))
+
+        # L'onglet Paramètres ne s'affiche JAMAIS dans la TabBar
+        # (accessible uniquement via le bouton ⚙ dans le header)
+        self.tabs.setTabVisible(3, False)
 
         tab_container_layout.addWidget(self.tabs)
         root.addWidget(tab_container, 1)
@@ -2402,13 +2566,12 @@ class MainWindow(QMainWindow):
                 )
 
     def _toggle_settings(self) -> None:
-        """Affiche/cache l'onglet Paramètres via le bouton ⚙."""
+        """Bascule sur l'onglet Paramètres sans jamais l'afficher dans la TabBar."""
         settings_idx = 3
-        currently_on_settings = self.tabs.currentIndex() == settings_idx
-        if currently_on_settings:
+        if self.tabs.currentIndex() == settings_idx:
             self.tabs.setCurrentIndex(0)
         else:
-            self.tabs.setTabVisible(settings_idx, True)
+            # On change juste l'index — le tab reste invisible dans la barre
             self.tabs.setCurrentIndex(settings_idx)
 
     def closeEvent(self, event) -> None:
