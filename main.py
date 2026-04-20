@@ -1,15 +1,13 @@
 """
-main.py — OmniMedia v4.5
-Nouveautés vs v4.4 :
-  - setup_logging() appelé au lancement → logs dans ~/.omnimedia/logs/app.log
-  - check_ffmpeg_capabilities() au démarrage + bandeau d'avertissement si H.265 absent
-  - Speed / ETA du worker téléchargement affichés dans DownloadTab
-v4.5 :
-  - AnimatedToggle : toggle pill custom avec knob animé
-  - SVG icons via icons.py dans la TabBar et les cartes
-  - Bug double onglet Paramètres corrigé
-  - Section accent/opacité supprimée de Settings
-  - Option "désactiver les animations" dans Settings
+main.py — OmniMedia v5.0
+v5.0 :
+  - Options téléchargement : miniature et tags toujours actifs, hors conditions mutagen
+  - Barre de progression indéterminée au démarrage (téléchargement, conversion, compression)
+  - Bouton ⚙ header supprimé — Paramètres uniquement via corner widget de la TabBar
+  - Progression convertisseur/compresseur : affichage fichier courant + barre globale corrigée
+  - Design débit/ETA refait (plus de carrés)
+  - Noms de fichiers visibles dans la file de conversion et compression
+  - Double bouton Paramètres supprimé
 """
 from __future__ import annotations
 
@@ -79,7 +77,7 @@ from converter import (
 )
 
 APP_NAME    = "OmniMedia"
-APP_VERSION = "4.4.0"
+APP_VERSION = "5.0.0"
 LOGO_PATH   = resource_path("logoOmniMedia.png")
 
 set_language(cfg.language)
@@ -465,11 +463,15 @@ class DropZone(QFrame):
         self.setAcceptDrops(True); self.setMinimumHeight(120); self._on_drop = on_drop
         lay = QVBoxLayout(self); lay.setAlignment(Qt.AlignmentFlag.AlignCenter); lay.setSpacing(8)
         self.icon_lbl = QLabel("⬇"); self.icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_lbl.setStyleSheet("font-size:32px; background:transparent; color:#5A96FF;")
+        self.icon_lbl.setStyleSheet(f"font-size:28px; background:transparent; color:{COLORS['accent']};")
         self.text_lbl = QLabel(t("drop_zone_text")); self.text_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.text_lbl.setStyleSheet(f"font-size:15px; font-weight:600; color:{COLORS['text_primary']}; background:transparent;")
+        self.text_lbl.setStyleSheet(
+            f"font-size:14px; font-weight:600; color:{COLORS['text_secondary']}; background:transparent;"
+        )
         self.sub_lbl = QLabel(t("drop_zone_sub")); self.sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sub_lbl.setStyleSheet(f"font-size:12px; color:{COLORS['text_muted']}; background:transparent;")
+        self.sub_lbl.setStyleSheet(
+            f"font-size:12px; color:{COLORS['text_muted']}; background:transparent;"
+        )
         lay.addWidget(self.icon_lbl); lay.addWidget(self.text_lbl); lay.addWidget(self.sub_lbl)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -490,7 +492,7 @@ class DropZone(QFrame):
         if paths: self._on_drop(paths)
 
 
-# ── Overlay Drag & Drop  ────────────────────────────────────
+# ── Overlay Drag & Drop (fenêtre entière) ────────────────────────────────────
 
 class DragOverlay(QWidget):
     """
@@ -558,7 +560,7 @@ class DragOverlay(QWidget):
         super().resizeEvent(event)
 
 
-# ── Stats Dashboard  ───────────────────────────────────────────
+# ── Stats Dashboard (barre du bas) ───────────────────────────────────────────
 
 class StatsBar(QFrame):
     """Panneau minimaliste : liste des fichiers modifiés."""
@@ -660,14 +662,14 @@ class DownloadAdvancedPanel(QWidget):
         self.playlist_mode_cb = make_toggle(t("playlist_mode"), cfg.playlist_mode, self._on_playlist_mode_changed)
         pl.addWidget(self.playlist_mode_cb)
 
-        # Indentation visuelle — options spécifiques aux playlists (sous-dossier etc.)
+        # Options spécifiques aux playlists (sous-dossier)
         self._playlist_opts = QWidget()
         plo = QVBoxLayout(self._playlist_opts)
         plo.setContentsMargins(18, 0, 0, 0); plo.setSpacing(6)
         self._playlist_opts.setVisible(cfg.playlist_mode)
         pl.addWidget(self._playlist_opts)
 
-        # "Continuer si indisponible" — visible TOUJOURS (utile même hors playlist)
+        # "Continuer si indisponible" — toujours visible
         self.ignore_errors_cb = make_toggle(
             "Continuer si une vidéo est indisponible",
             cfg.get("ignore_errors", True),
@@ -676,6 +678,25 @@ class DownloadAdvancedPanel(QWidget):
         pl.addWidget(self.ignore_errors_cb)
         err_hint = QLabel("Les erreurs seront listées à la fin du téléchargement.")
         err_hint.setObjectName("subtitle"); pl.addWidget(err_hint)
+
+        # ── Métadonnées — toujours actives (pas conditionné à mutagen) ─────────
+        self.embed_thumb_cb = make_toggle(
+            t("embed_thumbnail"),
+            cfg.get("embed_thumbnail", True),
+            lambda v: cfg.set("embed_thumbnail", v),
+        )
+        pl.addWidget(self.embed_thumb_cb)
+
+        self.auto_tag_cb = make_toggle(
+            t("auto_tag"),
+            cfg.auto_tag,
+            lambda v: setattr(cfg, "auto_tag", v),
+        )
+        if not MUTAGEN_AVAILABLE:
+            self.auto_tag_cb.setToolTip("mutagen non installé — pip install mutagen")
+        pl.addWidget(self.auto_tag_cb)
+
+        pl.addSpacing(4)
 
         row3 = QVBoxLayout(); row3.setSpacing(8)
         row3.addWidget(make_section(t("cookies_file")))
@@ -695,20 +716,13 @@ class DownloadAdvancedPanel(QWidget):
         self.import_browser_btn = QPushButton(t("import_browser_btn"))
         self.import_browser_btn.setObjectName("btn_secondary"); self.import_browser_btn.setFixedHeight(34)
         self.import_browser_btn.setEnabled(BROWSER_COOKIE3_AVAILABLE)
+        if not BROWSER_COOKIE3_AVAILABLE:
+            self.import_browser_btn.setToolTip("browser-cookie3 non installé — pip install browser-cookie3")
         self.import_browser_btn.clicked.connect(self._import_browser_cookies)
         self.browser_status = QLabel(""); self.browser_status.setObjectName("status_info")
         browser_row.addWidget(self.browser_combo); browser_row.addWidget(self.import_browser_btn)
         browser_row.addWidget(self.browser_status, 1)
         row4.addLayout(browser_row); pl.addLayout(row4)
-
-        self.embed_thumb_cb = make_toggle(t("embed_thumbnail"), cfg.get("embed_thumbnail", True), lambda v: cfg.set("embed_thumbnail", v))
-        self.embed_thumb_cb.setEnabled(MUTAGEN_AVAILABLE)
-        pl.addWidget(self.embed_thumb_cb)
-
-        self.auto_tag_cb = make_toggle(t("auto_tag"), cfg.auto_tag, lambda v: setattr(cfg, "auto_tag", v))
-        self.auto_tag_cb.setEnabled(MUTAGEN_AVAILABLE)
-        self.auto_tag_cb.setToolTip("Requiert mutagen — pip install mutagen")
-        pl.addWidget(self.auto_tag_cb)
 
         outer.addWidget(self.panel)
 
@@ -830,40 +844,66 @@ class DownloadTab(QWidget):
 
         # ── Barre de progression ─────────────────────────────────────────────
         self.progress = QProgressBar(); self.progress.setValue(0)
-        self.progress.setTextVisible(False); self.progress.setFixedHeight(6)
+        self.progress.setTextVisible(False); self.progress.setFixedHeight(5)
+        self.progress.setStyleSheet(
+            f"QProgressBar{{background:{COLORS['bg_hover']};border:none;border-radius:2px;}}"
+            f"QProgressBar::chunk{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"stop:0 {COLORS['accent']},stop:1 {COLORS['accent_light']});"
+            f"border-radius:2px;}}"
+        )
         root.addWidget(self.progress)
 
-        # ── Info progression (%, débit, ETA) ─────────────────────────────────
-        prog_info_card = QFrame(); prog_info_card.setObjectName("card_inner")
-        prog_info_card.setFixedHeight(52)
-        pil = QHBoxLayout(prog_info_card)
-        pil.setContentsMargins(20, 0, 20, 0); pil.setSpacing(0)
+        # ── Carte vitesse / ETA — design propre sans carrés ───────────────────
+        self._prog_info_card = QFrame()
+        self._prog_info_card.setObjectName("card_inner")
+        self._prog_info_card.setFixedHeight(54)
+        pil = QHBoxLayout(self._prog_info_card)
+        pil.setContentsMargins(24, 0, 24, 0); pil.setSpacing(16)
 
-        self._pct_lbl = QLabel("—")
+        # % grand
+        self._pct_lbl = QLabel("0%")
         self._pct_lbl.setStyleSheet(
-            f"font-size:20px; font-weight:800; color:{COLORS['accent_light']};"
-            f"background:transparent; min-width:60px;"
+            f"font-family:'Segoe UI Variable','Segoe UI',sans-serif;"
+            f"font-size:22px; font-weight:800; color:{COLORS['accent_light']};"
+            f"background:transparent; min-width:64px;"
         )
-        self._speed_lbl = QLabel("")
-        self._speed_lbl.setStyleSheet(
-            f"font-size:13px; font-weight:600; color:{COLORS['text_primary']}; background:transparent;"
-        )
-        self._speed_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._eta_lbl = QLabel("")
-        self._eta_lbl.setStyleSheet(
-            f"font-size:12px; color:{COLORS['text_secondary']}; background:transparent; min-width:80px;"
-        )
-        self._eta_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+
+        # Séparateur vertical
+        sep1 = QFrame(); sep1.setFrameShape(QFrame.Shape.VLine)
+        sep1.setFixedHeight(24)
+        sep1.setStyleSheet(f"color:{COLORS['border_soft']}; background:{COLORS['border_soft']}; border:none; max-width:1px;")
+
+        # Vitesse
+        speed_col = QVBoxLayout(); speed_col.setSpacing(1); speed_col.setContentsMargins(0,0,0,0)
+        speed_lbl_title = QLabel("VITESSE")
+        speed_lbl_title.setStyleSheet(f"font-size:9px; font-weight:700; color:{COLORS['text_muted']}; background:transparent; letter-spacing:0.8px;")
+        self._speed_lbl = QLabel("—")
+        self._speed_lbl.setStyleSheet(f"font-size:13px; font-weight:600; color:{COLORS['text_primary']}; background:transparent;")
+        speed_col.addWidget(speed_lbl_title)
+        speed_col.addWidget(self._speed_lbl)
+
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setFixedHeight(24)
+        sep2.setStyleSheet(f"color:{COLORS['border_soft']}; background:{COLORS['border_soft']}; border:none; max-width:1px;")
+
+        # ETA
+        eta_col = QVBoxLayout(); eta_col.setSpacing(1); eta_col.setContentsMargins(0,0,0,0)
+        eta_lbl_title = QLabel("TEMPS RESTANT")
+        eta_lbl_title.setStyleSheet(f"font-size:9px; font-weight:700; color:{COLORS['text_muted']}; background:transparent; letter-spacing:0.8px;")
+        self._eta_lbl = QLabel("—")
+        self._eta_lbl.setStyleSheet(f"font-size:13px; font-weight:600; color:{COLORS['text_primary']}; background:transparent;")
+        eta_col.addWidget(eta_lbl_title)
+        eta_col.addWidget(self._eta_lbl)
 
         pil.addWidget(self._pct_lbl)
+        pil.addWidget(sep1)
+        pil.addLayout(speed_col)
+        pil.addWidget(sep2)
+        pil.addLayout(eta_col)
         pil.addStretch()
-        pil.addWidget(self._speed_lbl)
-        pil.addStretch()
-        pil.addWidget(self._eta_lbl)
 
-        self._prog_info_card = prog_info_card
-        prog_info_card.hide()
-        root.addWidget(prog_info_card)
+        self._prog_info_card.hide()
+        root.addWidget(self._prog_info_card)
 
         # ── Statut + bouton ouvrir ────────────────────────────────────────────
         status_row = QHBoxLayout(); status_row.setSpacing(10)
@@ -945,9 +985,12 @@ class DownloadTab(QWidget):
         self.dl_btn.setEnabled(not busy); self.cancel_btn.setEnabled(busy)
         self.url_input.setEnabled(not busy); self.advanced.setEnabled(not busy)
         self._prog_info_card.setVisible(busy)
-        if not busy:
-            self.progress.setValue(0); _taskbar.clear()
-            self._pct_lbl.setText("—"); self._speed_lbl.setText(""); self._eta_lbl.setText("")
+        if busy:
+            self.progress.setRange(0, 100); self.progress.setValue(2)
+            self._pct_lbl.setText("…"); self._speed_lbl.setText("—"); self._eta_lbl.setText("—")
+        else:
+            self.progress.setRange(0, 100); self.progress.setValue(0); _taskbar.clear()
+            self._pct_lbl.setText("0%"); self._speed_lbl.setText("—"); self._eta_lbl.setText("—")
 
     def _cancel(self) -> None:
         if self._worker: self._worker.cancel()
@@ -1078,7 +1121,7 @@ class ConvertTab(QWidget):
         clr_q.setFixedHeight(26); clr_q.setStyleSheet("font-size:11px; padding:2px 10px;")
         clr_q.clicked.connect(self._clear_queue); q_hdr.addWidget(clr_q)
         root.addLayout(q_hdr)
-        self.queue_list = QListWidget(); self.queue_list.setMaximumHeight(150)
+        self.queue_list = QListWidget(); self.queue_list.setMinimumHeight(80); self.queue_list.setMaximumHeight(200)
         self.queue_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         root.addWidget(self.queue_list)
 
@@ -1136,9 +1179,18 @@ class ConvertTab(QWidget):
         # ── Progression ──────────────────────────────────────────────────────
         prog_row = QHBoxLayout()
         prog_row.addWidget(make_section(t("global_progress"))); prog_row.addStretch()
+        self._conv_prog_lbl = QLabel("")
+        self._conv_prog_lbl.setStyleSheet(f"font-size:11px; color:{COLORS['text_secondary']}; background:transparent;")
+        prog_row.addWidget(self._conv_prog_lbl)
         root.addLayout(prog_row)
         self.progress = QProgressBar(); self.progress.setValue(0)
-        self.progress.setTextVisible(False); self.progress.setFixedHeight(4)
+        self.progress.setTextVisible(False); self.progress.setFixedHeight(5)
+        self.progress.setStyleSheet(
+            f"QProgressBar{{background:{COLORS['bg_hover']};border:none;border-radius:2px;}}"
+            f"QProgressBar::chunk{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"stop:0 {COLORS['accent']},stop:1 {COLORS['accent_light']});"
+            f"border-radius:2px;}}"
+        )
         root.addWidget(self.progress)
 
         # ── Statut ───────────────────────────────────────────────────────────
@@ -1210,7 +1262,12 @@ class ConvertTab(QWidget):
     def _set_busy(self, busy: bool) -> None:
         self.convert_btn.setEnabled(not busy and bool(self._queued_files))
         self.cancel_btn.setEnabled(busy); self.drop_zone.setEnabled(not busy)
-        if not busy: self.progress.setValue(0); _taskbar.clear()
+        if busy:
+            self.progress.setRange(0, 100); self.progress.setValue(2)
+            self._conv_prog_lbl.setText("")
+        else:
+            self.progress.setRange(0, 100); self.progress.setValue(0); _taskbar.clear()
+            self._conv_prog_lbl.setText("")
 
     def _cancel(self) -> None:
         if self._batch_worker: self._batch_worker.cancel()
@@ -1238,12 +1295,14 @@ class ConvertTab(QWidget):
         self._batch_worker.start()
 
     def _on_overall_progress(self, v: int) -> None:
+        self._conv_prog_lbl.setText(f"{v}%")
         if cfg.animations_enabled:
             anim = QPropertyAnimation(self.progress, b"value", self)
             anim.setDuration(200)
             anim.setStartValue(self.progress.value())
             anim.setEndValue(v)
             anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._conv_anim = anim
             anim.start()
         else:
             self.progress.setValue(v)
@@ -1436,8 +1495,24 @@ class CompressorTab(QWidget):
         root.addWidget(self.platform_desc)
 
         # ── Progression ──────────────────────────────────────────────────────
+        prog_hdr = QHBoxLayout()
+        prog_hdr.addWidget(make_section("PROGRESSION"))
+        prog_hdr.addStretch()
+        self._comp_prog_lbl = QLabel("")
+        self._comp_prog_lbl.setStyleSheet(
+            f"font-size:11px; color:{COLORS['text_secondary']}; background:transparent;"
+        )
+        prog_hdr.addWidget(self._comp_prog_lbl)
+        root.addLayout(prog_hdr)
+
         self.progress = QProgressBar(); self.progress.setValue(0)
-        self.progress.setTextVisible(False); self.progress.setFixedHeight(4)
+        self.progress.setTextVisible(False); self.progress.setFixedHeight(5)
+        self.progress.setStyleSheet(
+            f"QProgressBar{{background:{COLORS['bg_hover']};border:none;border-radius:2px;}}"
+            f"QProgressBar::chunk{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"stop:0 {COLORS['success']},stop:1 #22D3A5);"
+            f"border-radius:2px;}}"
+        )
         root.addWidget(self.progress)
 
         # ── Statut ───────────────────────────────────────────────────────────
@@ -1498,7 +1573,8 @@ class CompressorTab(QWidget):
             abr = self.audio_br_combo.currentData() or 128
             vbr = compute_target_bitrate(f, target_bytes, abr)
             if vbr is None:
-                kind, text = "optimal", "Impossible d'estimer"
+                # ffprobe ne peut pas lire la durée — compression CRF quand même possible
+                kind, text = "warn", "⚠  Taille estimée — mode CRF"
             elif vbr >= 2000:
                 kind, text = "optimal", "✅  Qualité optimale"
             elif vbr >= 800:
@@ -1581,7 +1657,12 @@ class CompressorTab(QWidget):
     def _set_busy(self, busy: bool) -> None:
         self.compress_btn.setEnabled(not busy and bool(self._queued_files))
         self.cancel_btn.setEnabled(busy); self.drop_zone.setEnabled(not busy)
-        if not busy: self.progress.setValue(0); _taskbar.clear()
+        if busy:
+            self.progress.setRange(0, 100); self.progress.setValue(2)
+            self._comp_prog_lbl.setText("")
+        else:
+            self.progress.setRange(0, 100); self.progress.setValue(0); _taskbar.clear()
+            self._comp_prog_lbl.setText("")
 
     def _cancel(self) -> None:
         if self._batch_worker: self._batch_worker.cancel()
@@ -1690,12 +1771,14 @@ class CompressorTab(QWidget):
         self._batch_worker.start()
 
     def _on_overall_progress(self, v: int) -> None:
+        self._comp_prog_lbl.setText(f"{v}%")
         if cfg.animations_enabled:
             anim = QPropertyAnimation(self.progress, b"value", self)
             anim.setDuration(200)
             anim.setStartValue(self.progress.value())
             anim.setEndValue(v)
             anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._comp_anim = anim
             anim.start()
         else:
             self.progress.setValue(v)
@@ -2333,24 +2416,14 @@ class HeaderBar(QWidget):
             f"font-size:17px; font-weight:800; color:{COLORS['text_primary']}; "
             f"letter-spacing:-0.5px; background:transparent;"
         )
-
         ver = QLabel(f"v{APP_VERSION}")
         ver.setStyleSheet(badge_style("info"))
 
         lay.addWidget(name_lbl)
         lay.addWidget(ver)
         lay.addStretch()
-        self._settings_btn = QPushButton("⚙")
-        self._settings_btn.setObjectName("btn_settings_gear")
-        self._settings_btn.setFixedSize(32, 32)
-        self._settings_btn.setToolTip("Paramètres")
-        self._settings_btn.setFlat(True)
-        self._settings_btn.setStyleSheet(
-            f"QPushButton{{background:transparent; color:{COLORS['text_secondary']}; "
-            f"font-size:18px; border:none; border-radius:6px; padding:0px;}}"
-            f"QPushButton:hover{{background:{COLORS['bg_hover']}; color:{COLORS['text_primary']};}}"
-        )
-        lay.addWidget(self._settings_btn)
+        # Le bouton ⚙ est supprimé — Paramètres accessible via le corner widget de la TabBar
+        self._settings_btn = None  # gardé pour compat, non affiché
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2374,7 +2447,6 @@ class MainWindow(QMainWindow):
 
         self._header = HeaderBar()
         self._header.minimize_to_tray_requested.connect(self._minimize_to_tray)
-        self._header._settings_btn.clicked.connect(self._toggle_settings)
         root.addWidget(self._header)
 
         tab_container = QWidget()
@@ -2597,12 +2669,21 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
     def _route_drop(self, paths: list[Path]) -> None:
-        videos = [p for p in paths if classify_file(p) == "video"]
+        """Route les fichiers vers l'onglet actif si possible, sinon vers Convertir."""
         media  = [p for p in paths if classify_file(p) != "unknown"]
-        if videos and len(videos) == len(media):
-            self.tabs.setCurrentWidget(self._comp_tab); self._comp_tab.add_files(videos)
+        videos = [p for p in paths if classify_file(p) == "video"]
+        current = self.tabs.currentWidget()
+
+        # Onglet actif = Compresser ET tous les fichiers sont des vidéos → Compresser
+        if current == self._comp_tab and videos:
+            self._comp_tab.add_files(videos)
+        # Onglet actif = Convertir → Convertir
+        elif current == self._conv_tab and media:
+            self._conv_tab.add_files(media)
+        # Tous les autres cas → Convertir (par défaut)
         elif media:
-            self.tabs.setCurrentWidget(self._conv_tab); self._conv_tab.add_files(media)
+            self.tabs.setCurrentWidget(self._conv_tab)
+            self._conv_tab.add_files(media)
 
     def _minimize_to_tray(self) -> None:
         if self._tray and QSystemTrayIcon.isSystemTrayAvailable():
