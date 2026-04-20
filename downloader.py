@@ -196,6 +196,34 @@ def _embed_id3_tags(filepath: Path, info: dict) -> None:
         logger.error("[AutoTag] Could not embed tags in %s: %s", filepath, exc, exc_info=True)
 
 
+# ── yt-dlp logger (capture erreurs par élément de playlist) ──────────────────
+
+class _YtdlpLogger:
+    """
+    Logger yt-dlp compatible.
+    Capture les messages d'erreur et les reporte via item_error sur le worker.
+    """
+    def __init__(self, worker: "DownloadWorker") -> None:
+        self._worker = worker
+
+    def debug(self, msg: str) -> None:
+        if msg.startswith("[debug]"):
+            return
+        logger.debug("[yt-dlp] %s", msg)
+
+    def info(self, msg: str) -> None:
+        logger.debug("[yt-dlp] %s", msg)
+
+    def warning(self, msg: str) -> None:
+        logger.warning("[yt-dlp] %s", msg)
+
+    def error(self, msg: str) -> None:
+        logger.error("[yt-dlp] %s", msg)
+        # Émet item_error pour afficher l'erreur dans la file UI
+        self._worker._errors.append({"title": "?", "error": msg})
+        self._worker.item_error.emit("?", msg[:120])
+
+
 # ── Download Worker ───────────────────────────────────────────────────────────
 
 class DownloadWorker(QThread):
@@ -314,14 +342,14 @@ class DownloadWorker(QThread):
             "noprogress"         : True,
             "no_warnings"        : True,
             "restrictfilenames"  : True,
+            # Passe un logger yt-dlp pour capturer les erreurs par élément
+            "logger"             : _YtdlpLogger(self),
         }
 
-        # ── Mode tolérant aux erreurs (playlist) ──────────────────────────────
-        # ignoreerrors=True → yt-dlp zap les éléments indisponibles et continue.
-        # On capture les erreurs via le hook pour les afficher en fin de téléchargement.
-        if self.playlist_mode and self.options.ignore_errors:
+        # ── Mode tolérant aux erreurs (ignoreerrors) ──────────────────────────
+        # Activé dès que l'option est cochée, indépendamment du mode playlist.
+        if self.options.ignore_errors:
             opts["ignoreerrors"] = True
-            opts["error_hooks"]  = [self._error_hook]
 
         if ffmpeg_loc:
             opts["ffmpeg_location"] = ffmpeg_loc
@@ -333,11 +361,21 @@ class DownloadWorker(QThread):
 
         if self.mode == "audio":
             opts["format"] = "bestaudio/best"
-            opts["postprocessors"] = [{
-                "key"             : "FFmpegExtractAudio",
-                "preferredcodec"  : "mp3",
-                "preferredquality": o.audio_bitrate.rstrip("k"),
-            }]
+            # yt-dlp ajoute "PP" en interne → la clé est sans le suffixe "PP"
+            opts["postprocessors"] = [
+                {
+                    "key"             : "FFmpegExtractAudio",
+                    "preferredcodec"  : "mp3",
+                    "preferredquality": o.audio_bitrate.rstrip("k"),
+                },
+                # Embed métadonnées (titre, artiste, album, date, genre…)
+                {"key": "FFmpegMetadata", "add_metadata": True},
+            ]
+            if o.embed_thumbnail:
+                opts["writethumbnail"] = True
+                opts["postprocessors"].append(
+                    {"key": "EmbedThumbnail", "already_have_thumbnail": False}
+                )
         else:
             res_map = {
                 "best": "bestvideo+bestaudio/best",
@@ -346,8 +384,16 @@ class DownloadWorker(QThread):
                 "480" : "bestvideo[height<=480]+bestaudio/best",
                 "360" : "bestvideo[height<=360]+bestaudio/best",
             }
-            opts["format"]               = res_map.get(o.max_resolution, "bestvideo+bestaudio/best")
-            opts["merge_output_format"]  = "mp4"
+            opts["format"]              = res_map.get(o.max_resolution, "bestvideo+bestaudio/best")
+            opts["merge_output_format"] = "mp4"
+            opts["postprocessors"] = [
+                {"key": "FFmpegMetadata", "add_metadata": True},
+            ]
+            if o.embed_thumbnail:
+                opts["writethumbnail"] = True
+                opts["postprocessors"].append(
+                    {"key": "EmbedThumbnail", "already_have_thumbnail": False}
+                )
 
         return opts
 

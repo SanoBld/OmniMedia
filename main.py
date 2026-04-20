@@ -312,16 +312,15 @@ class AnimatedToggle(QCheckBox):
         kx = float(margin + kr + travel * self._knob_pos)
         ky = float(ty + th / 2.0)
 
-        # Shadow subtile (CORRIGÉ)
+        # Shadow subtile — addEllipse(x, y, w, h) positionne le coin supérieur gauche
+        # → décaler de -kr pour centrer sur (kx, ky)
         shadow = QPainterPath()
-        # On passe les arguments (x, y, rx, ry) directement en float
-        shadow.addEllipse(kx, ky + 1.0, kr, kr)
+        shadow.addEllipse(kx - kr, ky - kr + 1.0, kr * 2, kr * 2)
         p.fillPath(shadow, QColor(0, 0, 0, 35))
 
-        # Knob blanc (CORRIGÉ)
+        # Knob blanc centré
         knob = QPainterPath()
-        # On passe les arguments (x, y, rx, ry) directement en float
-        knob.addEllipse(kx, ky, kr, kr)
+        knob.addEllipse(kx - kr, ky - kr, kr * 2, kr * 2)
         p.fillPath(knob, QColor("#FFFFFF"))
 
         # ── Label ─────────────────────────────────────────────────────────
@@ -454,6 +453,7 @@ class FileProgressItem(QWidget):
         anim.setStartValue(0.25)
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._flash_anim = anim  # référence Python — évite crash GC PyQt6
         anim.start()
 
 
@@ -490,7 +490,7 @@ class DropZone(QFrame):
         if paths: self._on_drop(paths)
 
 
-# ── Overlay Drag & Drop (fenêtre entière) ────────────────────────────────────
+# ── Overlay Drag & Drop  ────────────────────────────────────
 
 class DragOverlay(QWidget):
     """
@@ -558,7 +558,7 @@ class DragOverlay(QWidget):
         super().resizeEvent(event)
 
 
-# ── Stats Dashboard (barre du bas) ───────────────────────────────────────────
+# ── Stats Dashboard  ───────────────────────────────────────────
 
 class StatsBar(QFrame):
     """Panneau minimaliste : liste des fichiers modifiés."""
@@ -610,8 +610,8 @@ class FadingTabWidget(QTabWidget):
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.Type.OutQuart)
         anim.finished.connect(lambda: widget.setGraphicsEffect(None))
+        self._anim = anim  # référence Python — évite crash GC PyQt6
         anim.start()
-        self._anim = anim
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -660,20 +660,22 @@ class DownloadAdvancedPanel(QWidget):
         self.playlist_mode_cb = make_toggle(t("playlist_mode"), cfg.playlist_mode, self._on_playlist_mode_changed)
         pl.addWidget(self.playlist_mode_cb)
 
-        # Indentation visuelle — options spécifiques aux playlists
+        # Indentation visuelle — options spécifiques aux playlists (sous-dossier etc.)
         self._playlist_opts = QWidget()
         plo = QVBoxLayout(self._playlist_opts)
         plo.setContentsMargins(18, 0, 0, 0); plo.setSpacing(6)
+        self._playlist_opts.setVisible(cfg.playlist_mode)
+        pl.addWidget(self._playlist_opts)
+
+        # "Continuer si indisponible" — visible TOUJOURS (utile même hors playlist)
         self.ignore_errors_cb = make_toggle(
-            "Continuer si une vidéo est indisponible  (recommandé pour les playlists)",
+            "Continuer si une vidéo est indisponible",
             cfg.get("ignore_errors", True),
             lambda v: cfg.set("ignore_errors", v),
         )
-        plo.addWidget(self.ignore_errors_cb)
+        pl.addWidget(self.ignore_errors_cb)
         err_hint = QLabel("Les erreurs seront listées à la fin du téléchargement.")
-        err_hint.setObjectName("subtitle"); plo.addWidget(err_hint)
-        self._playlist_opts.setVisible(cfg.playlist_mode)
-        pl.addWidget(self._playlist_opts)
+        err_hint.setObjectName("subtitle"); pl.addWidget(err_hint)
 
         row3 = QVBoxLayout(); row3.setSpacing(8)
         row3.addWidget(make_section(t("cookies_file")))
@@ -828,17 +830,40 @@ class DownloadTab(QWidget):
 
         # ── Barre de progression ─────────────────────────────────────────────
         self.progress = QProgressBar(); self.progress.setValue(0)
-        self.progress.setTextVisible(False); self.progress.setFixedHeight(5)
+        self.progress.setTextVisible(False); self.progress.setFixedHeight(6)
         root.addWidget(self.progress)
 
-        # ── Speed / ETA ───────────────────────────────────────────────────────
-        self.speed_eta_lbl = QLabel("")
-        self.speed_eta_lbl.setObjectName("status_info")
-        self.speed_eta_lbl.setStyleSheet(
-            f"font-size:11px; color:{COLORS['text_muted']}; background:transparent;"
+        # ── Info progression (%, débit, ETA) ─────────────────────────────────
+        prog_info_card = QFrame(); prog_info_card.setObjectName("card_inner")
+        prog_info_card.setFixedHeight(52)
+        pil = QHBoxLayout(prog_info_card)
+        pil.setContentsMargins(20, 0, 20, 0); pil.setSpacing(0)
+
+        self._pct_lbl = QLabel("—")
+        self._pct_lbl.setStyleSheet(
+            f"font-size:20px; font-weight:800; color:{COLORS['accent_light']};"
+            f"background:transparent; min-width:60px;"
         )
-        self.speed_eta_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        root.addWidget(self.speed_eta_lbl)
+        self._speed_lbl = QLabel("")
+        self._speed_lbl.setStyleSheet(
+            f"font-size:13px; font-weight:600; color:{COLORS['text_primary']}; background:transparent;"
+        )
+        self._speed_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._eta_lbl = QLabel("")
+        self._eta_lbl.setStyleSheet(
+            f"font-size:12px; color:{COLORS['text_secondary']}; background:transparent; min-width:80px;"
+        )
+        self._eta_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+
+        pil.addWidget(self._pct_lbl)
+        pil.addStretch()
+        pil.addWidget(self._speed_lbl)
+        pil.addStretch()
+        pil.addWidget(self._eta_lbl)
+
+        self._prog_info_card = prog_info_card
+        prog_info_card.hide()
+        root.addWidget(prog_info_card)
 
         # ── Statut + bouton ouvrir ────────────────────────────────────────────
         status_row = QHBoxLayout(); status_row.setSpacing(10)
@@ -919,7 +944,10 @@ class DownloadTab(QWidget):
     def _set_busy(self, busy: bool) -> None:
         self.dl_btn.setEnabled(not busy); self.cancel_btn.setEnabled(busy)
         self.url_input.setEnabled(not busy); self.advanced.setEnabled(not busy)
-        if not busy: self.progress.setValue(0); _taskbar.clear()
+        self._prog_info_card.setVisible(busy)
+        if not busy:
+            self.progress.setValue(0); _taskbar.clear()
+            self._pct_lbl.setText("—"); self._speed_lbl.setText(""); self._eta_lbl.setText("")
 
     def _cancel(self) -> None:
         if self._worker: self._worker.cancel()
@@ -950,12 +978,14 @@ class DownloadTab(QWidget):
         self._worker.start()
 
     def _on_progress(self, v: int) -> None:
+        self._pct_lbl.setText(f"{v}%")
         if cfg.animations_enabled:
             anim = QPropertyAnimation(self.progress, b"value", self)
             anim.setDuration(180)
             anim.setStartValue(self.progress.value())
             anim.setEndValue(v)
             anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._prog_anim = anim
             anim.start()
         else:
             self.progress.setValue(v)
@@ -963,11 +993,11 @@ class DownloadTab(QWidget):
 
     def _on_speed(self, speed: str) -> None:
         self._dl_speed = speed
-        self._refresh_speed_eta()
+        self._speed_lbl.setText(speed)
 
     def _on_eta(self, eta: str) -> None:
         self._dl_eta = eta
-        self._refresh_speed_eta()
+        self._eta_lbl.setText(f"⏱  {eta}" if eta else "")
 
     def _on_item_error(self, title: str, error: str) -> None:
         """Un élément de playlist a été ignoré — on le marque dans la file."""
@@ -979,19 +1009,10 @@ class DownloadTab(QWidget):
         self.queue_list.addItem(item)
         self.queue_list.scrollToBottom()
 
-    def _refresh_speed_eta(self) -> None:
-        speed = getattr(self, "_dl_speed", "")
-        eta   = getattr(self, "_dl_eta", "")
-        parts = []
-        if speed: parts.append(speed)
-        if eta:   parts.append(f"ETA {eta}")
-        self.speed_eta_lbl.setText("  ·  ".join(parts))
-
     def _on_finished(self, ok: bool, path: str) -> None:
         elapsed = time.monotonic() - getattr(self, "_start_time", time.monotonic())
         self._last_file = path; self._set_busy(False)
         self._dl_speed = ""; self._dl_eta = ""
-        self.speed_eta_lbl.setText("")
         if ok:
             self.progress.setValue(100); self.open_btn.show()
             set_status(self.status_lbl, f"✔  {Path(path).name}", "ok")
@@ -1528,10 +1549,8 @@ class CompressorTab(QWidget):
     def _on_files_dropped(self, paths: list[Path]) -> None:
         added = 0
         for p in paths:
-            ft = classify_file(p)
-            if ft not in ("video",) or p in self._queued_files:
-                if ft == "unknown": continue
-                if p in self._queued_files: continue
+            if classify_file(p) != "video" or p in self._queued_files:
+                continue
             self._queued_files.append(p)
             info = get_media_info(p)
             tb = self._get_target_bytes()
@@ -1573,27 +1592,23 @@ class CompressorTab(QWidget):
         if not ffmpeg_available():
             QMessageBox.critical(self, "FFmpeg", t("ffmpeg_missing_msg")); return
 
-        platform = self._selected_platform if self._selected_platform != "custom" else ""
         self._set_busy(True); self.open_btn.hide()
         self.batch_count_lbl.setText(f"0 / {len(self._queued_files)}")
         self._start_time = time.monotonic()
         _taskbar.set_state(_WinTaskbar.TBPF_NORMAL)
         set_status(self.status_lbl, "Démarrage de la compression…")
 
-        compress_key = platform if platform else f"__custom__{self._get_target_bytes()}"
-
-        self._batch_worker = BatchConvertWorker(
-            self._queued_files, "mp4", self._output_dir,
-            "custom", cfg.max_workers, "", "",
-            compress_target=compress_key if platform else "",
-            parent=self,
-        )
-
         if self._selected_platform == "custom":
-            self._batch_worker = None
             self._run_custom_compression()
             return
 
+        # Plateforme prédéfinie (discord / whatsapp / email / telegram)
+        self._batch_worker = BatchConvertWorker(
+            self._queued_files, "mp4", self._output_dir,
+            "custom", cfg.max_workers, "", "",
+            compress_target=self._selected_platform,
+            parent=self,
+        )
         self._batch_worker.overall_progress.connect(self._on_overall_progress)
         self._batch_worker.status.connect(self.status_lbl.setText)
         self._batch_worker.file_progress.connect(self._on_file_progress)
@@ -1625,29 +1640,38 @@ class CompressorTab(QWidget):
             def cancel(self_): self_._cancelled = True
 
             def run(self_) -> None:
-                from converter import build_compress_args, _build_output_path, _convert_sync
+                from converter import compute_target_bitrate, _convert_sync, PRESETS as _P
                 _success = 0; _errors = 0
                 for i, f in enumerate(self_.files):
                     if self_._cancelled: break
                     self_.status.emit(f"⚙  [{i+1}/{len(self_.files)}]  {f.name}")
-                    from converter import compute_target_bitrate
                     vbr = compute_target_bitrate(f, self_.tb, self_.abr)
-                    if vbr is None:
-                        self_.file_error.emit(i, str(f), "Impossible de lire la durée")
-                        _errors += 1; continue
-
-                    cargs = [
-                        "-c:v", "libx264", "-b:v", f"{vbr}k", "-maxrate", f"{vbr}k",
-                        "-bufsize", f"{vbr*2}k", "-c:a", "aac",
-                        "-b:a", f"{self_.abr}k", "-movflags", "+faststart",
-                    ]
-                    from converter import PRESETS as _P
+                    if vbr is not None:
+                        cargs = [
+                            "-c:v", "libx264", "-b:v", f"{vbr}k",
+                            "-maxrate", f"{vbr}k", "-bufsize", f"{vbr*2}k",
+                            "-c:a", "aac", "-b:a", f"{self_.abr}k",
+                            "-movflags", "+faststart",
+                        ]
+                    else:
+                        # Fallback CRF quand la durée est illisible
+                        target_mb = self_.tb / (1024 * 1024)
+                        if target_mb <= 10:   crf = 34
+                        elif target_mb <= 16: crf = 32
+                        elif target_mb <= 25: crf = 28
+                        elif target_mb <= 50: crf = 24
+                        else:                 crf = 20
+                        cargs = [
+                            "-c:v", "libx264", "-crf", str(crf), "-preset", "fast",
+                            "-c:a", "aac", "-b:a", f"{self_.abr}k",
+                            "-movflags", "+faststart",
+                        ]
                     _P["__custom_compress__"] = {
-                        "label": "custom", "fmt": "mp4", "args": cargs, "desc": ""
+                        "label": "custom", "fmt": "mp4", "args": cargs, "desc": "",
                     }
                     def _prog(v, idx=i): self_.file_progress.emit(idx, v)
-                    ok, val = _convert_sync(f, "mp4", self_.out_dir, "__custom_compress__",
-                                            progress_cb=_prog)
+                    ok, val = _convert_sync(f, "mp4", self_.out_dir,
+                                            "__custom_compress__", progress_cb=_prog)
                     _P.pop("__custom_compress__", None)
                     if ok: _success += 1; self_.file_done.emit(i, str(f), val)
                     else:  _errors  += 1; self_.file_error.emit(i, str(f), val)
@@ -2366,22 +2390,45 @@ class MainWindow(QMainWindow):
         self._comp_tab     = CompressorTab()
         self._settings_tab = SettingsTab()
 
-        self.tabs.addTab(self._dl_tab,       "  Télécharger  ")
-        self.tabs.addTab(self._conv_tab,     "  Convertir    ")
-        self.tabs.addTab(self._comp_tab,     "  Compresser   ")
-        self.tabs.addTab(self._settings_tab, "  Paramètres   ")
+        self.tabs.addTab(self._dl_tab,   "  Télécharger  ")
+        self.tabs.addTab(self._conv_tab, "  Convertir    ")
+        self.tabs.addTab(self._comp_tab, "  Compresser   ")
+        # Onglet 3 : Paramètres — caché de la TabBar, activé via corner widget
+        self.tabs.addTab(self._settings_tab, "")
+        self.tabs.setTabVisible(3, False)
 
-        # Icônes SVG dans la barre d'onglets
-        _tab_icons = [
-            ("download", 0), ("convert", 1), ("compress", 2), ("settings", 3),
-        ]
         _ic_color = COLORS.get("text_secondary", "#8A96B8")
-        for icon_name, idx in _tab_icons:
+        for icon_name, idx in [("download", 0), ("convert", 1), ("compress", 2)]:
             self.tabs.setTabIcon(idx, svg_icon(icon_name, color=_ic_color, size=16))
 
-        # L'onglet Paramètres ne s'affiche JAMAIS dans la TabBar
-        # (accessible uniquement via le bouton ⚙ dans le header)
-        self.tabs.setTabVisible(3, False)
+        # ── Bouton Paramètres en coin droit de la TabBar ──────────────────────
+        self._settings_corner_btn = QPushButton("  ⚙  Paramètres  ")
+        self._settings_corner_btn.setCheckable(True)
+        self._settings_corner_btn.setFixedHeight(34)
+        self._settings_corner_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._settings_corner_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  color: {COLORS['text_secondary']};"
+            f"  border: none;"
+            f"  border-left: 1px solid {COLORS['border_soft']};"
+            f"  border-radius: 0;"
+            f"  padding: 0 18px;"
+            f"  font-size: 13px;"
+            f"  font-weight: 500;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: {COLORS['bg_hover']};"
+            f"  color: {COLORS['text_primary']};"
+            f"}}"
+            f"QPushButton:checked {{"
+            f"  background: {COLORS['bg_card']};"
+            f"  color: {COLORS['accent_light']};"
+            f"  border-bottom: 2px solid {COLORS['accent']};"
+            f"}}"
+        )
+        self._settings_corner_btn.clicked.connect(self._toggle_settings)
+        self.tabs.setCornerWidget(self._settings_corner_btn, Qt.Corner.TopRightCorner)
 
         tab_container_layout.addWidget(self.tabs)
         root.addWidget(tab_container, 1)
@@ -2468,6 +2515,7 @@ class MainWindow(QMainWindow):
             anim.setEndValue(1.0)
             anim.setEasingCurve(QEasingCurve.Type.OutCubic)
             anim.finished.connect(lambda: banner.setGraphicsEffect(None))
+            banner._anim = anim  # référence Python — évite crash GC PyQt6
             anim.start()
 
     def _setup_tray(self) -> None:
@@ -2566,15 +2614,23 @@ class MainWindow(QMainWindow):
                 )
 
     def _toggle_settings(self) -> None:
-        """Bascule sur l'onglet Paramètres sans jamais l'afficher dans la TabBar."""
-        settings_idx = 3
-        if self.tabs.currentIndex() == settings_idx:
-            self.tabs.setCurrentIndex(0)
-        else:
-            # On change juste l'index — le tab reste invisible dans la barre
-            self.tabs.setCurrentIndex(settings_idx)
+        """Bascule vers/depuis l'onglet Paramètres via le corner widget."""
+        going_to_settings = self.tabs.currentIndex() != 3
+        self.tabs.setCurrentIndex(3 if going_to_settings else 0)
+        self._settings_corner_btn.setChecked(going_to_settings)
 
     def closeEvent(self, event) -> None:
+        # Annuler tous les workers actifs avant que Python ne détruise les threads
+        # (évite le crash ThreadPoolExecutor dans threading.py atexit)
+        for tab in (self._dl_tab, self._conv_tab, self._comp_tab):
+            try:
+                w = getattr(tab, "_worker", None) or getattr(tab, "_batch_worker", None)
+                if w is not None and w.isRunning():
+                    w.cancel()
+                    w.quit()
+                    w.wait(800)
+            except Exception:
+                pass
         event.accept()
         QApplication.quit()
 
@@ -2584,10 +2640,13 @@ class MainWindow(QMainWindow):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    # Doit être appelé AVANT la création de QApplication
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME); app.setApplicationVersion(APP_VERSION)
     app.setWindowIcon(app_icon())
-    app.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app.setQuitOnLastWindowClosed(True)
     ThemeManager.setup(app)
     window = MainWindow(); window.show()

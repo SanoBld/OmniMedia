@@ -299,14 +299,32 @@ def build_compress_args(
     """
     Return the FFmpeg argument list to compress *input_path* to the
     given *target_key* (e.g. "discord"), or an empty list on failure.
+    If ffprobe cannot read the duration, falls back to an aggressive CRF
+    preset calibrated to the target size.
     """
     target_bytes = COMPRESS_TARGETS.get(target_key)
     if not target_bytes:
         return []
 
     vbr = compute_target_bitrate(input_path, target_bytes, audio_bitrate_kbps)
+
     if vbr is None:
-        return []
+        # Fallback : CRF calibré sur la taille cible — sans connaitre la durée
+        target_mb = target_bytes / (1024 * 1024)
+        if target_mb <= 10:   crf = 34
+        elif target_mb <= 16: crf = 32
+        elif target_mb <= 25: crf = 28
+        elif target_mb <= 50: crf = 24
+        else:                 crf = 20
+        logger.warning(
+            "build_compress_args: duration unknown for %s — using CRF %d fallback",
+            input_path.name, crf
+        )
+        return [
+            "-c:v", "libx264", "-crf", str(crf), "-preset", "fast",
+            "-c:a", "aac", "-b:a", f"{audio_bitrate_kbps}k",
+            "-movflags", "+faststart",
+        ]
 
     return [
         "-c:v", "libx264",
