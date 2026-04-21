@@ -1,12 +1,15 @@
 """
-ui_styles.py — OmniMedia v4.5
+ui_styles.py — OmniMedia v5.0
 Thèmes : Dark / OLED / Light / Auto / System (couleur d'accent du PC).
-v4.5 :
-  - Détection couleur d'accent système (Windows, macOS, GNOME)
-  - Thème "system" : accent = couleur de l'OS, fond = dark/light selon l'OS
-  - Toutes les clés couleur manquantes ajoutées (warn_*, hover states, etc.)
-  - QSS uniformisé : hover states sur tous les widgets, focus ring clair
-  - Bouton URL agrandi avec object name dédié
+v5.0 :
+  - text_muted amélioré (#4D5780 → #6A789A) — meilleur contraste WCAG
+  - État :pressed sur tous les boutons — retour tactile satisfaisant
+  - Halo glow discret sur le bouton principal au :hover
+  - Barre de progression "pill" (6px max-height, border-radius 3px)
+  - Séparateurs OLED adoucis — évitent l'éblouissement
+  - RadioButton stylisé (cohérence avec les CheckBox)
+  - Badges : fonds *_dim systématiques
+  - section_label_style couleur relevée à text_muted
 """
 from __future__ import annotations
 import sys
@@ -17,10 +20,6 @@ import sys
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_system_accent_color() -> str | None:
-    """
-    Retourne la couleur d'accent définie par l'utilisateur dans l'OS.
-    Format : '#RRGGBB' ou None si non détectable.
-    """
     if sys.platform == "win32":
         try:
             import winreg
@@ -28,11 +27,10 @@ def get_system_accent_color() -> str | None:
             val, _ = winreg.QueryValueEx(key, "AccentColor")
             abgr = int(val) & 0xFFFFFFFF
             r, g, b = abgr & 0xFF, (abgr >> 8) & 0xFF, (abgr >> 16) & 0xFF
-            if r + g + b > 80:           # ignore le gris presque noir
+            if r + g + b > 80:
                 return f"#{r:02X}{g:02X}{b:02X}"
         except Exception:
             pass
-
     elif sys.platform == "darwin":
         try:
             import subprocess
@@ -44,8 +42,7 @@ def get_system_accent_color() -> str | None:
             }.get(r.stdout.strip(), "#007AFF")
         except Exception:
             pass
-
-    else:   # Linux / GNOME 42+
+    else:
         try:
             import subprocess
             r = subprocess.run(
@@ -59,12 +56,10 @@ def get_system_accent_color() -> str | None:
             }.get(name)
         except Exception:
             pass
-
     return None
 
 
 def _accent_variants(hex_color: str) -> dict[str, str]:
-    """Dérive accent_light, accent_glow, accent_dim depuis la couleur de base."""
     try:
         r = int(hex_color[1:3], 16)
         g = int(hex_color[3:5], 16)
@@ -82,7 +77,7 @@ def _accent_variants(hex_color: str) -> dict[str, str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Palettes de base
+#  Palettes
 # ══════════════════════════════════════════════════════════════════════════════
 
 _DARK: dict[str, str] = {
@@ -93,7 +88,8 @@ _DARK: dict[str, str] = {
     "success": "#2DD68A", "success_dim": "#0B2820",
     "warning": "#F5A623", "warning_dim": "#2C1C06",
     "danger": "#E8445A",  "danger_dim": "#2B0910",
-    "text_primary": "#E2EAF8", "text_secondary": "#8A96B8", "text_muted": "#4D5780",
+    # #6A789A au lieu de #4D5780 — meilleur contraste sur bg_deep (#090E1A)
+    "text_primary": "#E2EAF8", "text_secondary": "#8A96B8", "text_muted": "#6A789A",
     "border": "#1C2540", "border_soft": "#242E4C",
     "border_focus": "#3B7DF8", "border_drag_over": "#6199FF",
     "drop_bg": "#111827", "drop_border": "#2A3558",
@@ -105,7 +101,8 @@ _OLED: dict[str, str] = {
     **_DARK,
     "bg_deep": "#000000", "bg_card": "#060912", "bg_input": "#090E1A",
     "bg_hover": "#0C1020", "bg_panel": "#040709",
-    "border": "#0C1020", "border_soft": "#141A2E",
+    # Séparateurs adoucis pour OLED
+    "border": "#101522", "border_soft": "#181F34",
     "drop_bg": "#000000", "drop_border": "#141A2E",
     "warn_bg": "#1C1000", "warn_border": "#4A3800",
 }
@@ -118,7 +115,7 @@ _LIGHT: dict[str, str] = {
     "success": "#16A34A", "success_dim": "#DCFCE7",
     "warning": "#D97706", "warning_dim": "#FEF9C3",
     "danger": "#DC2626",  "danger_dim": "#FEE2E2",
-    "text_primary": "#0F172A", "text_secondary": "#334155", "text_muted": "#94A3B8",
+    "text_primary": "#0F172A", "text_secondary": "#334155", "text_muted": "#64748B",
     "border": "#CBD5E1", "border_soft": "#E2E8F0",
     "border_focus": "#2563EB", "border_drag_over": "#3B82F6",
     "drop_bg": "#F8FAFF", "drop_border": "#CBD5E1",
@@ -281,10 +278,15 @@ QPushButton {{
     border-radius:12px; padding:11px 28px;
     font-size:13px; font-weight:600; letter-spacing:0.2px;
 }}
-QPushButton:hover {{ background:{c['accent_light']}; }}
+QPushButton:hover {{
+    background:{c['accent_light']};
+    border:2px solid rgba(97,153,255,0.30);
+}}
 QPushButton:pressed {{
-    background:{c['accent_dim']}; color:{c['accent_light']};
-    padding-top:12px; padding-bottom:10px;
+    background:{c['accent']};
+    border:1.5px solid {c['accent_dim']};
+    padding-top:13px; padding-bottom:9px;
+    color:rgba(255,255,255,0.82);
 }}
 QPushButton:disabled {{ background:{c['border']}; color:{c['text_muted']}; }}
 QPushButton:focus {{ border:2px solid {c['accent_light']}; }}
@@ -299,7 +301,8 @@ QPushButton#btn_secondary:hover {{
     background:{c['bg_input']}; color:{c['text_primary']}; border-color:{c['accent']};
 }}
 QPushButton#btn_secondary:pressed {{
-    background:{c['border_soft']}; padding-top:10px; padding-bottom:8px;
+    background:{c['border_soft']}; color:{c['text_muted']};
+    padding-top:10px; padding-bottom:8px; border-color:{c['border']};
 }}
 QPushButton#btn_secondary:disabled {{
     color:{c['text_muted']}; border-color:{c['border']}; background:{c['bg_panel']};
@@ -311,15 +314,37 @@ QPushButton#btn_danger {{
     border:1.5px solid {c['danger']}; border-radius:10px;
     padding:9px 18px; font-size:12px; font-weight:600;
 }}
-QPushButton#btn_danger:hover {{ background:{c['danger']}; color:#FFFFFF; }}
+QPushButton#btn_danger:hover {{ background:{c['danger']}; color:#FFFFFF; border:none; }}
+QPushButton#btn_danger:pressed {{
+    background:{c['danger']}; color:rgba(255,255,255,0.82);
+    padding-top:10px; padding-bottom:8px;
+}}
 
 /* ── Bouton gear Settings ────────────────────────────────────────────── */
 QPushButton#btn_settings_gear {{
     background:transparent; color:{c['text_secondary']};
     font-size:18px; border:none; border-radius:8px; padding:2px;
 }}
-QPushButton#btn_settings_gear:hover {{
+QPushButton#btn_settings_gear:hover {{ background:{c['bg_hover']}; color:{c['text_primary']}; }}
+QPushButton#btn_settings_gear:pressed {{ background:{c['border_soft']}; }}
+
+/* ── Bouton coin Paramètres ──────────────────────────────────────────── */
+QPushButton#corner_settings_btn {{
+    background:transparent; color:{c['text_secondary']};
+    border:none; border-left:1px solid {c['border_soft']};
+    border-radius:0; padding:0 18px;
+    font-size:13px; font-weight:500;
+}}
+QPushButton#corner_settings_btn:hover {{
     background:{c['bg_hover']}; color:{c['text_primary']};
+}}
+QPushButton#corner_settings_btn:pressed {{
+    background:{c['accent_glow']}; color:{c['accent_light']};
+    padding-top:1px;
+}}
+QPushButton#corner_settings_btn:checked {{
+    background:{c['bg_card']}; color:{c['accent_light']};
+    border-bottom:2px solid {c['accent']};
 }}
 
 /* ── ComboBox ────────────────────────────────────────────────────────── */
@@ -347,14 +372,20 @@ QComboBox QAbstractItemView::item {{
 }}
 QComboBox QAbstractItemView::item:hover {{ background:{c['bg_hover']}; }}
 
-/* ── Barre de progression ────────────────────────────────────────────── */
+/* ── Barre de progression pill 6px ──────────────────────────────────── */
 QProgressBar {{
-    background:{c['bg_hover']}; border:none; border-radius:4px;
+    background:{c['bg_hover']}; border:none; border-radius:3px; max-height:6px;
 }}
 QProgressBar::chunk {{
     background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
         stop:0 {c['accent']},stop:1 {c['accent_light']});
-    border-radius:4px;
+    border-radius:3px;
+}}
+/* Barre compression — variante verte */
+QProgressBar#compress_progress::chunk {{
+    background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
+        stop:0 {c['success']},stop:1 #22D3A5);
+    border-radius:3px;
 }}
 
 /* ── Labels ──────────────────────────────────────────────────────────── */
@@ -364,9 +395,9 @@ QLabel#title {{
 }}
 QLabel#subtitle {{ font-size:12px; color:{c['text_muted']}; background:transparent; }}
 QLabel#status_info {{ color:{c['text_secondary']}; background:transparent; }}
-QLabel#status_ok   {{ color:{c['success']};        background:transparent; font-weight:600; }}
-QLabel#status_err  {{ color:{c['danger']};          background:transparent; font-weight:600; }}
-QLabel#status_warn {{ color:{c['warning']};         background:transparent; font-weight:600; }}
+QLabel#status_ok   {{ color:{c['success']};   background:transparent; font-weight:600; }}
+QLabel#status_err  {{ color:{c['danger']};    background:transparent; font-weight:600; }}
+QLabel#status_warn {{ color:{c['warning']};   background:transparent; font-weight:600; }}
 QLabel#card_section_icon  {{ font-size:18px; background:transparent; }}
 QLabel#card_section_title {{
     font-size:13px; font-weight:700; color:{c['text_primary']}; background:transparent;
@@ -401,6 +432,19 @@ QCheckBox#toggle_switch::indicator {{
 }}
 QCheckBox#toggle_switch::indicator:checked {{ background:{c['accent']}; }}
 QCheckBox#toggle_switch::indicator:hover {{ border:2px solid {c['accent']}; }}
+
+/* ── RadioButton ─────────────────────────────────────────────────────── */
+QRadioButton {{
+    color:{c['text_secondary']}; spacing:10px; font-size:13px;
+}}
+QRadioButton::indicator {{
+    width:18px; height:18px; border-radius:9px;
+    border:1.5px solid {c['border_soft']}; background:{c['bg_input']};
+}}
+QRadioButton::indicator:checked {{
+    background:{c['accent']}; border-color:{c['accent_light']};
+}}
+QRadioButton::indicator:hover {{ border-color:{c['accent']}; }}
 
 /* ── SpinBox ─────────────────────────────────────────────────────────── */
 QSpinBox {{
@@ -464,6 +508,9 @@ QPushButton#theme_btn {{
 QPushButton#theme_btn:hover {{
     background:{c['bg_input']}; color:{c['text_primary']}; border-color:{c['border_focus']};
 }}
+QPushButton#theme_btn:pressed {{
+    background:{c['accent_glow']}; padding-top:10px; padding-bottom:8px;
+}}
 QPushButton#theme_btn:checked {{
     background:{c['accent_glow']}; color:{c['accent_light']};
     border:2px solid {c['accent']}; font-weight:700;
@@ -474,18 +521,21 @@ QPushButton#theme_preview_dark {{
     border-radius:12px; min-width:78px; min-height:48px;
     color:#DCE4F5; font-size:11px; font-weight:600;
 }}
+QPushButton#theme_preview_dark:hover  {{ border-color:{c['text_muted']}; }}
 QPushButton#theme_preview_dark:checked {{ border:2px solid {c['accent']}; }}
 QPushButton#theme_preview_oled {{
     background:#000000; border:2px solid {c['border_soft']};
     border-radius:12px; min-width:78px; min-height:48px;
     color:#555; font-size:11px; font-weight:600;
 }}
+QPushButton#theme_preview_oled:hover  {{ border-color:{c['text_muted']}; }}
 QPushButton#theme_preview_oled:checked {{ border:2px solid {c['accent']}; }}
 QPushButton#theme_preview_light {{
     background:#F0F4FC; border:2px solid {c['border_soft']};
     border-radius:12px; min-width:78px; min-height:48px;
     color:#0F172A; font-size:11px; font-weight:600;
 }}
+QPushButton#theme_preview_light:hover  {{ border-color:{c['text_muted']}; }}
 QPushButton#theme_preview_light:checked {{ border:2px solid {c['accent']}; }}
 QPushButton#theme_preview_auto {{
     background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #111827,stop:1 #F0F4FC);
@@ -515,17 +565,17 @@ QLabel#ffmpeg_dot_warn {{
     min-width:10px; max-width:10px; min-height:10px; max-height:10px;
 }}
 
-/* ── Barres de comparaison Compressor ────────────────────────────────── */
+/* ── Barres comparaison Compressor ───────────────────────────────────── */
 QFrame#compare_bar_bg  {{
-    background:{c['bg_hover']}; border-radius:6px; border:none;
+    background:{c['bg_hover']}; border-radius:4px; border:none;
 }}
 QFrame#compare_bar_fill {{
     background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
         stop:0 {c['accent']},stop:1 {c['accent_light']});
-    border-radius:6px; border:none;
+    border-radius:4px; border:none;
 }}
 
-/* ── Badges compression ──────────────────────────────────────────────── */
+/* ── Badges — fonds *_dim systématiques ──────────────────────────────── */
 QLabel#badge_optimal {{
     background:{c['success_dim']}; color:{c['success']};
     border-radius:8px; padding:4px 12px; font-size:11px; font-weight:700;
@@ -539,7 +589,7 @@ QLabel#badge_danger {{
     border-radius:8px; padding:4px 12px; font-size:11px; font-weight:700;
 }}
 
-/* ── Barre stats (bas de fenêtre) ────────────────────────────────────── */
+/* ── Barre stats (bas) ───────────────────────────────────────────────── */
 QFrame#stats_bar {{
     background:{c['bg_card']}; border-top:1px solid {c['border_soft']}; border-radius:0;
 }}
@@ -550,34 +600,35 @@ QLabel#stat_label {{
     font-size:10px; font-weight:600; color:{c['text_muted']};
     background:transparent; letter-spacing:0.6px;
 }}
-/* ── Bouton options avancées ────────────────────────────────────────────── */
+
+/* ── Bouton options avancées ─────────────────────────────────────────── */
 QPushButton#btn_advanced {{
-    background:transparent;
-    color:{c['text_muted']};
-    border:1.5px solid {c['border_soft']};
-    border-radius:8px;
-    padding:6px 16px;
-    font-size:12px;
-    font-weight:500;
-    text-align:left;
+    background:transparent; color:{c['text_muted']};
+    border:1.5px solid {c['border_soft']}; border-radius:8px;
+    padding:6px 16px; font-size:12px; font-weight:500; text-align:left;
 }}
 QPushButton#btn_advanced:hover {{
-    background:{c['bg_hover']};
-    color:{c['text_secondary']};
-    border-color:{c['accent']};
+    background:{c['bg_hover']}; color:{c['text_secondary']}; border-color:{c['accent']};
+}}
+QPushButton#btn_advanced:pressed {{
+    background:{c['accent_glow']}; padding-top:7px; padding-bottom:5px;
 }}
 QPushButton#btn_advanced:checked {{
-    color:{c['accent_light']};
-    border-color:{c['accent']};
-    background:{c['accent_glow']};
+    color:{c['accent_light']}; border-color:{c['accent']}; background:{c['accent_glow']};
 }}
 
-/* ── Panneau options avancées ───────────────────────────────────────────── */
+/* ── Panneau options avancées ────────────────────────────────────────── */
 QFrame#advanced_panel {{
-    background:{c['bg_panel']};
-    border:1px solid {c['border']};
-    border-radius:14px;
-    margin-top:4px;
+    background:{c['bg_panel']}; border:1px solid {c['border']};
+    border-radius:14px; margin-top:4px;
+}}
+
+/* ── Séparateurs (HLine / VLine) ─────────────────────────────────────── */
+QFrame[frameShape="4"] {{
+    background:{c['border_soft']}; border:none; max-height:1px;
+}}
+QFrame[frameShape="5"] {{
+    background:{c['border_soft']}; border:none; max-width:1px;
 }}
 
 """

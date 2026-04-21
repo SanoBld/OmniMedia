@@ -46,8 +46,13 @@ _DEFAULTS: dict[str, Any] = {
     "notif_sound"        : False,
     "notif_tray_bg"      : True,
     # ── Interface ──────────────────────────────────────────────────────────
-    "animations_enabled" : True,          # active les transitions et animations UI
-    "ignore_errors"      : True,          # playlist : continuer même en cas d'erreur
+    "animations_enabled" : True,
+    "ignore_errors"      : True,
+    # ── Téléchargement — options avancées persistées ────────────────────────
+    "dl_audio_bitrate"   : "192k",        # bitrate audio par défaut
+    "dl_max_resolution"  : "best",        # résolution vidéo par défaut
+    "dl_mode"            : "video",       # "video" | "audio"
+    "dl_playlist_items"  : "",            # plage items playlist
     # ── Other ──────────────────────────────────────────────────────────────
     "embed_thumbnail"    : True,
     "auto_tag"           : True,
@@ -55,6 +60,12 @@ _DEFAULTS: dict[str, Any] = {
     "compress_target"    : "",
     "minimize_to_tray"   : False,
     "start_in_tray"      : False,
+    # ── Conversion ─────────────────────────────────────────────────────────
+    "conv_last_format"   : "mp4",         # dernier format de sortie utilisé
+    "conv_last_preset"   : "custom",      # dernier preset utilisé
+    # ── Compression ────────────────────────────────────────────────────────
+    "comp_last_platform" : "discord",     # dernière plateforme sélectionnée
+    "comp_audio_kbps"    : 128,           # qualité audio compression
 }
 
 

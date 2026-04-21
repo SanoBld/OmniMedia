@@ -1,0 +1,207 @@
+================================================================================
+  OmniMedia v5.1 — Installation Guide
+  Download, Convert & Compress your media files
+================================================================================
+
+Thank you for using OmniMedia!
+This guide will walk you through everything you need to get started.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  REQUIREMENTS
+────────────────────────────────────────────────────────────────────────────────
+
+  • Python 3.10 or later      https://www.python.org/downloads/
+  • FFmpeg (for conversion)   https://ffmpeg.org/download.html
+  • Git (optional)            https://git-scm.com/
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 1 — Install Python 3.10+
+────────────────────────────────────────────────────────────────────────────────
+
+  Windows:
+    winget install Python.Python.3.11
+    — or download from https://www.python.org/downloads/
+
+  macOS:
+    brew install python@3.11
+
+  Linux (Ubuntu / Debian):
+    sudo apt update && sudo apt install python3.11 python3-pip
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 2 — Install FFmpeg
+────────────────────────────────────────────────────────────────────────────────
+
+  FFmpeg is required for all conversion and compression features.
+
+  Windows (recommended):
+    winget install ffmpeg
+
+    — or manually:
+    1. Download from https://www.gyan.dev/ffmpeg/builds/
+       (choose "ffmpeg-release-essentials.zip")
+    2. Extract to C:\ffmpeg\
+    3. Add C:\ffmpeg\bin to your system PATH:
+       Settings → System → About → Advanced system settings
+       → Environment Variables → Path → New → C:\ffmpeg\bin
+
+  macOS:
+    brew install ffmpeg
+
+  Linux (Ubuntu / Debian):
+    sudo apt update && sudo apt install ffmpeg
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 3 — Install Python dependencies
+────────────────────────────────────────────────────────────────────────────────
+
+  Open a terminal (Command Prompt, PowerShell, or Terminal) in the OmniMedia
+  folder and run:
+
+    pip install -r requirements.txt
+
+  This installs all required packages at once:
+
+  ┌─────────────────────┬──────────────────────────────────────────────────────┐
+  │ Package             │ Purpose                                              │
+  ├─────────────────────┼──────────────────────────────────────────────────────┤
+  │ PyQt6               │ User interface (GUI framework)                       │
+  │ yt-dlp              │ Download engine (YouTube, SoundCloud, 1000+ sites)   │
+  │ mutagen             │ Audio tag embedding (title, artist, cover art...)    │
+  │ browser-cookie3     │ Import cookies from Chrome / Firefox / Edge          │
+  │ darkdetect          │ Detect OS dark/light mode for Auto theme             │
+  │ requests            │ Version checker & thumbnail fallback                 │
+  │ Pillow              │ Image processing support                             │
+  └─────────────────────┴──────────────────────────────────────────────────────┘
+
+  Note: browser-cookie3 and mutagen are optional — the app works without them,
+  but the "Import from browser" button and audio tag features will be disabled.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 4 — (Optional) Install a JavaScript runtime for yt-dlp
+────────────────────────────────────────────────────────────────────────────────
+
+  Some video formats on YouTube and other sites require a JavaScript runtime.
+  Without it, yt-dlp may miss certain quality options (a warning is shown).
+
+  Install Deno (recommended):
+    Windows:   winget install DenoLand.Deno
+    macOS:     brew install deno
+    Linux:     curl -fsSL https://deno.land/install.sh | sh
+
+  — or install Node.js:
+    https://nodejs.org/
+
+
+────────────────────────────────────────────────────────────────────────────────
+  STEP 5 — Run OmniMedia
+────────────────────────────────────────────────────────────────────────────────
+
+    python main.py
+
+  Or on Windows, you can double-click main.py if Python is associated.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  BUILDING A STANDALONE EXECUTABLE (.exe / .app)
+────────────────────────────────────────────────────────────────────────────────
+
+  A PyInstaller spec file is included. To build:
+
+    pip install pyinstaller
+    pyinstaller OmniMedia.spec
+
+  The output will be in the /dist/ folder.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  TROUBLESHOOTING
+────────────────────────────────────────────────────────────────────────────────
+
+  "FFmpeg not found"
+    → Make sure FFmpeg is installed and in your PATH.
+      Run: ffmpeg -version  in a terminal to verify.
+
+  "yt-dlp not installed"
+    → Run: pip install yt-dlp
+
+  "No supported JavaScript runtime" (warning in console)
+    → Install Deno or Node.js (see Step 4). Downloads still work.
+
+  App crashes on settings tab
+    → Known issue with older versions. Make sure you are on v5.1+.
+
+  Slow downloads or missing formats
+    → Update yt-dlp via the Settings tab → "Update yt-dlp" button,
+      or run: pip install --upgrade yt-dlp
+
+  Logs location:
+    Windows:  %USERPROFILE%\.omnimedia\logs\app.log
+    macOS:    ~/.omnimedia/logs/app.log
+    Linux:    ~/.omnimedia/logs/app.log
+
+
+────────────────────────────────────────────────────────────────────────────────
+  QUICK INSTALL (one command)
+────────────────────────────────────────────────────────────────────────────────
+
+  Windows PowerShell (run as Administrator):
+
+    winget install Python.Python.3.11 ffmpeg DenoLand.Deno; `
+    pip install PyQt6 yt-dlp mutagen browser-cookie3 darkdetect requests Pillow
+
+  macOS / Linux terminal:
+
+    brew install python@3.11 ffmpeg deno  # macOS
+    # or: sudo apt install python3.11 ffmpeg  # Ubuntu
+    pip install PyQt6 yt-dlp mutagen browser-cookie3 darkdetect requests Pillow
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ACKNOWLEDGEMENTS & THANK YOU
+────────────────────────────────────────────────────────────────────────────────
+
+  OmniMedia would not exist without these incredible open-source projects:
+
+  • yt-dlp            github.com/yt-dlp/yt-dlp
+    The most powerful and actively maintained video downloader available.
+    Supporting 1000+ sites, constantly updated. An absolute cornerstone.
+
+  • FFmpeg             ffmpeg.org
+    The universal media processing engine. Decades of work by hundreds of
+    contributors making audio/video conversion accessible to everyone.
+
+  • PyQt6 / Qt         riverbankcomputing.com / qt.io
+    For providing a professional-grade cross-platform GUI framework that
+    makes beautiful desktop applications possible in Python.
+
+  • mutagen            github.com/quodlibet/mutagen
+    Clean and reliable audio metadata handling in pure Python.
+
+  • darkdetect         github.com/albertosottile/darkdetect
+    Elegant OS dark mode detection across Windows, macOS, and Linux.
+
+  • Lucide Icons       lucide.dev
+    Beautiful, consistent open-source icons that inspired the SVG icon set
+    used throughout OmniMedia's interface.
+
+  • The Python Software Foundation
+    For maintaining the language that makes projects like this possible.
+
+  ──────────────────────────────────────────────────────────────────────────────
+
+  Thank YOU for downloading and using OmniMedia.
+  If you find it useful, consider starring the repository on GitHub and
+  sharing it with others who might benefit from it.
+
+  Your feedback and contributions are always welcome.
+
+  — SanoBld
+    github.com/SanoBld/OmniMedia
+
+================================================================================

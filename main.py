@@ -1,13 +1,13 @@
 """
-main.py — OmniMedia v5.0
-v5.0 :
-  - Options téléchargement : miniature et tags toujours actifs, hors conditions mutagen
-  - Barre de progression indéterminée au démarrage (téléchargement, conversion, compression)
-  - Bouton ⚙ header supprimé — Paramètres uniquement via corner widget de la TabBar
-  - Progression convertisseur/compresseur : affichage fichier courant + barre globale corrigée
-  - Design débit/ETA refait (plus de carrés)
-  - Noms de fichiers visibles dans la file de conversion et compression
-  - Double bouton Paramètres supprimé
+main.py — OmniMedia v5.1
+v5.1 :
+  - Persistance complète des préférences : mode téléchargement, bitrate, résolution,
+    playlist, format de conversion, preset, plateforme compression, qualité audio
+  - Bug thème Auto/System : QTimer de re-détection toutes les 30s pour suivre
+    le changement OS dark/light sans redémarrage
+  - Animation onglets : fondu + translation verticale légère (effet levitation)
+  - hline() / vline() : style via QSS pour cohérence avec tous les thèmes
+  - Cohérence visuelle : stroke_width normalisé, espacement amélioré
 """
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ from converter import (
 )
 
 APP_NAME    = "OmniMedia"
-APP_VERSION = "5.0.0"
+APP_VERSION = "5.1.0"
 LOGO_PATH   = resource_path("logoOmniMedia.png")
 
 set_language(cfg.language)
@@ -160,20 +160,42 @@ _taskbar = _WinTaskbar()
 # ── ThemeManager ──────────────────────────────────────────────────────────────
 
 class ThemeManager:
-    _app:   QApplication | None = None
-    _theme: str = cfg.theme
+    _app:    QApplication | None = None
+    _theme:  str = cfg.theme
+    _timer:  QTimer | None = None
+    _last_dark: bool | None = None
 
     @classmethod
     def setup(cls, app: QApplication) -> None:
-        cls._app = app; cls.apply(cls._theme)
+        cls._app = app
+        cls.apply(cls._theme)
+        # Re-détection automatique pour les thèmes "auto" et "system"
+        cls._timer = QTimer()
+        cls._timer.setInterval(30_000)   # 30 secondes
+        cls._timer.timeout.connect(cls._check_system_theme)
+        cls._timer.start()
 
     @classmethod
     def apply(cls, theme: str) -> None:
         cls._theme = theme; cfg.theme = theme
-        if cls._app: cls._app.setStyleSheet(get_stylesheet(theme))
+        if cls._app:
+            cls._app.setStyleSheet(get_stylesheet(theme))
 
     @classmethod
-    def current(cls) -> str: return cls._theme
+    def current(cls) -> str:
+        return cls._theme
+
+    @classmethod
+    def _check_system_theme(cls) -> None:
+        """Appelé toutes les 30s — recharge le thème si dark/light a changé dans l'OS."""
+        if cls._theme not in ("auto", "system"):
+            return
+        from ui_styles import _detect_system_dark
+        is_dark = _detect_system_dark()
+        if is_dark != cls._last_dark:
+            cls._last_dark = is_dark
+            if cls._app:
+                cls._app.setStyleSheet(get_stylesheet(cls._theme))
 
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
@@ -185,14 +207,14 @@ def open_folder(path: str | Path) -> None:
     else:                          subprocess.Popen(["xdg-open", str(target)])
 
 def hline() -> QFrame:
-    """Séparateur horizontal fin — préférer addSpacing() pour les sections."""
     f = QFrame(); f.setFrameShape(QFrame.Shape.HLine); f.setFixedHeight(1)
-    f.setStyleSheet(f"background:{COLORS['border_soft']}; border:none; margin:4px 0;")
+    # Le style est géré par QSS via QFrame[frameShape="4"] dans ui_styles.py
+    f.setStyleSheet("")
     return f
 
 def vline() -> QFrame:
-    f = QFrame(); f.setFrameShape(QFrame.Shape.VLine)
-    f.setStyleSheet(f"color:{COLORS['border_soft']};")
+    f = QFrame(); f.setFrameShape(QFrame.Shape.VLine); f.setFixedWidth(1)
+    f.setStyleSheet("")
     return f
 
 def make_label(text: str, obj: str = "") -> QLabel:
@@ -352,8 +374,8 @@ def make_card(icon: str, title: str) -> tuple[QFrame, QHBoxLayout, QVBoxLayout]:
     outer.addLayout(hdr)
     # Pas de hline ici — le spacing du layout suffit
 
-    # Layout contenu
-    content = QVBoxLayout(); content.setSpacing(16)
+    # Layout contenu — espacement 20px pour une meilleure aération
+    content = QVBoxLayout(); content.setSpacing(20)
     outer.addLayout(content)
 
     return card, hdr, content
@@ -416,11 +438,8 @@ class FileProgressItem(QWidget):
         self._name.setStyleSheet(f"background:transparent; color:{COLORS['text_secondary']}; font-size:12px;")
         self._name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._bar = QProgressBar(); self._bar.setValue(0); self._bar.setTextVisible(False)
-        self._bar.setFixedSize(90, 4)
-        self._bar.setStyleSheet(
-            f"QProgressBar{{background:{COLORS['bg_hover']};border:none;border-radius:2px;}}"
-            f"QProgressBar::chunk{{background:{COLORS['accent']};border-radius:2px;}}"
-        )
+        self._bar.setFixedSize(90, 5)
+        self._bar.setStyleSheet("")  # hérite du QSS global
         lay.addWidget(self._status); lay.addWidget(icon_lbl)
         lay.addWidget(self._name, 1); lay.addWidget(self._bar)
 
@@ -591,11 +610,12 @@ class StatsBar(QFrame):
 # ── Onglets avec animation fondu ──────────────────────────────────────────────
 
 class FadingTabWidget(QTabWidget):
-    """QTabWidget avec fondu d'entrée sur chaque changement d'onglet."""
+    """QTabWidget avec fondu + légère translation verticale au changement d'onglet."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._anim: QPropertyAnimation | None = None
+        self._pos_anim: QPropertyAnimation | None = None
         self.currentChanged.connect(self._on_tab_changed)
 
     def _on_tab_changed(self, index: int) -> None:
@@ -604,15 +624,18 @@ class FadingTabWidget(QTabWidget):
             return
         if not cfg.animations_enabled:
             return
+
+        # Fondu opacité
         effect = QGraphicsOpacityEffect(widget)
         widget.setGraphicsEffect(effect)
         anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(240)
+        anim.setDuration(220)
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutQuart)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.finished.connect(lambda: widget.setGraphicsEffect(None))
-        self._anim = anim  # référence Python — évite crash GC PyQt6
+        self._anim = anim
+
         anim.start()
 
 
@@ -644,14 +667,29 @@ class DownloadAdvancedPanel(QWidget):
         self.bitrate_combo = QComboBox()
         for lbl, val in [(t("bitrate_128"),"128k"),(t("bitrate_192"),"192k"),(t("bitrate_320"),"320k")]:
             self.bitrate_combo.addItem(lbl, val)
-        self.bitrate_combo.setCurrentIndex(1); self.bitrate_combo.setMinimumWidth(150)
+        # Restaurer le bitrate sauvegardé
+        saved_br = cfg.get("dl_audio_bitrate", "192k")
+        br_idx = self.bitrate_combo.findData(saved_br)
+        self.bitrate_combo.setCurrentIndex(br_idx if br_idx >= 0 else 1)
+        self.bitrate_combo.setMinimumWidth(150)
+        self.bitrate_combo.currentIndexChanged.connect(
+            lambda: cfg.set("dl_audio_bitrate", self.bitrate_combo.currentData())
+        )
         col_br.addWidget(self.bitrate_combo); row1.addLayout(col_br)
         col_res = QVBoxLayout(); col_res.setSpacing(8)
         col_res.addWidget(make_section(t("max_resolution")))
         self.res_combo = QComboBox()
         for lbl, val in [(t("res_best"),"best"),("1080p","1080"),("720p","720"),("480p","480")]:
             self.res_combo.addItem(lbl, val)
-        self.res_combo.setMinimumWidth(130); col_res.addWidget(self.res_combo)
+        # Restaurer la résolution sauvegardée
+        saved_res = cfg.get("dl_max_resolution", "best")
+        res_idx = self.res_combo.findData(saved_res)
+        self.res_combo.setCurrentIndex(res_idx if res_idx >= 0 else 0)
+        self.res_combo.setMinimumWidth(130)
+        self.res_combo.currentIndexChanged.connect(
+            lambda: cfg.set("dl_max_resolution", self.res_combo.currentData())
+        )
+        col_res.addWidget(self.res_combo)
         row1.addLayout(col_res); row1.addStretch(); pl.addLayout(row1)
 
         row2 = QVBoxLayout(); row2.setSpacing(8)
@@ -820,8 +858,12 @@ class DownloadTab(QWidget):
         fmt_row = QHBoxLayout(); fmt_row.setSpacing(20)
         self.rb_video = QRadioButton(t("video_format"))
         self.rb_audio = QRadioButton(t("audio_format"))
-        self.rb_video.setChecked(True)
+        # Restaurer le mode sauvegardé
+        saved_mode = cfg.get("dl_mode", "video")
+        self.rb_audio.setChecked(saved_mode == "audio")
+        self.rb_video.setChecked(saved_mode != "audio")
         grp = QButtonGroup(self); grp.addButton(self.rb_video); grp.addButton(self.rb_audio)
+        self.rb_video.toggled.connect(lambda v: cfg.set("dl_mode", "video" if v else "audio"))
         fmt_row.addWidget(self.rb_video); fmt_row.addWidget(self.rb_audio); fmt_row.addStretch()
         cl.addLayout(fmt_row)
 
@@ -845,12 +887,7 @@ class DownloadTab(QWidget):
         # ── Barre de progression ─────────────────────────────────────────────
         self.progress = QProgressBar(); self.progress.setValue(0)
         self.progress.setTextVisible(False); self.progress.setFixedHeight(5)
-        self.progress.setStyleSheet(
-            f"QProgressBar{{background:{COLORS['bg_hover']};border:none;border-radius:2px;}}"
-            f"QProgressBar::chunk{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f"stop:0 {COLORS['accent']},stop:1 {COLORS['accent_light']});"
-            f"border-radius:2px;}}"
-        )
+        self.progress.setStyleSheet("")  # style via QSS global
         root.addWidget(self.progress)
 
         # ── Carte vitesse / ETA — design propre sans carrés ───────────────────
@@ -1146,6 +1183,13 @@ class ConvertTab(QWidget):
         self.fmt_combo = QComboBox(); self.fmt_combo.setMinimumWidth(140)
         for f in ["mp4","mp3","mkv","avi","webm","flac","wav","gif","jpg","png"]:
             self.fmt_combo.addItem(f".{f}", f)
+        # Restaurer le format sauvegardé
+        saved_fmt = cfg.get("conv_last_format", "mp4")
+        fi = self.fmt_combo.findData(saved_fmt)
+        if fi >= 0: self.fmt_combo.setCurrentIndex(fi)
+        self.fmt_combo.currentIndexChanged.connect(
+            lambda: cfg.set("conv_last_format", self.fmt_combo.currentData())
+        )
         fmt_col.addWidget(self.fmt_combo)
         fmt_col.addSpacing(8)
         fmt_col.addWidget(make_section(t("output_folder")))
@@ -1185,12 +1229,7 @@ class ConvertTab(QWidget):
         root.addLayout(prog_row)
         self.progress = QProgressBar(); self.progress.setValue(0)
         self.progress.setTextVisible(False); self.progress.setFixedHeight(5)
-        self.progress.setStyleSheet(
-            f"QProgressBar{{background:{COLORS['bg_hover']};border:none;border-radius:2px;}}"
-            f"QProgressBar::chunk{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f"stop:0 {COLORS['accent']},stop:1 {COLORS['accent_light']});"
-            f"border-radius:2px;}}"
-        )
+        self.progress.setStyleSheet("")  # style via QSS global
         root.addWidget(self.progress)
 
         # ── Statut ───────────────────────────────────────────────────────────
@@ -1219,6 +1258,10 @@ class ConvertTab(QWidget):
     def _reload_presets_combo(self) -> None:
         _refresh_presets(); self.preset_combo.blockSignals(True); self.preset_combo.clear()
         for key, p in PRESETS.items(): self.preset_combo.addItem(p["label"], key)
+        # Restaurer le preset sauvegardé
+        saved = cfg.get("conv_last_preset", "custom")
+        idx = self.preset_combo.findData(saved)
+        if idx >= 0: self.preset_combo.setCurrentIndex(idx)
         self.preset_combo.blockSignals(False)
 
     def refresh_presets(self) -> None: self._reload_presets_combo()
@@ -1229,6 +1272,7 @@ class ConvertTab(QWidget):
         if p.get("fmt"):
             idx = self.fmt_combo.findData(p["fmt"])
             if idx >= 0: self.fmt_combo.setCurrentIndex(idx)
+        cfg.set("conv_last_preset", key)
 
     def _browse_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -1472,8 +1516,15 @@ class CompressorTab(QWidget):
         self.audio_br_combo = QComboBox()
         for lbl, val in [("128 kbps (standard)", 128), ("192 kbps (haute)", 192), ("96 kbps (léger)", 96)]:
             self.audio_br_combo.addItem(lbl, val)
+        # Restaurer la qualité audio sauvegardée
+        saved_kbps = cfg.get("comp_audio_kbps", 128)
+        kbps_idx = self.audio_br_combo.findData(saved_kbps)
+        if kbps_idx >= 0: self.audio_br_combo.setCurrentIndex(kbps_idx)
         self.audio_br_combo.setMinimumWidth(180); aq_col.addWidget(self.audio_br_combo)
-        self.audio_br_combo.currentIndexChanged.connect(self._refresh_compare)
+        self.audio_br_combo.currentIndexChanged.connect(lambda: (
+            cfg.set("comp_audio_kbps", self.audio_br_combo.currentData()),
+            self._refresh_compare()
+        ))
         aq_row.addLayout(aq_col)
 
         of_col = QVBoxLayout(); of_col.setSpacing(8)
@@ -1506,13 +1557,9 @@ class CompressorTab(QWidget):
         root.addLayout(prog_hdr)
 
         self.progress = QProgressBar(); self.progress.setValue(0)
+        self.progress.setObjectName("compress_progress")
         self.progress.setTextVisible(False); self.progress.setFixedHeight(5)
-        self.progress.setStyleSheet(
-            f"QProgressBar{{background:{COLORS['bg_hover']};border:none;border-radius:2px;}}"
-            f"QProgressBar::chunk{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f"stop:0 {COLORS['success']},stop:1 #22D3A5);"
-            f"border-radius:2px;}}"
-        )
+        self.progress.setStyleSheet("")  # style via QSS global
         root.addWidget(self.progress)
 
         # ── Statut ───────────────────────────────────────────────────────────
@@ -1537,8 +1584,14 @@ class CompressorTab(QWidget):
         btn_row.addWidget(self.cancel_btn); btn_row.addWidget(self.compress_btn)
         root.addLayout(btn_row)
 
-        self._platform_btns["discord"].setChecked(True)
-        self._update_platform_desc("discord")
+        # Restaurer la plateforme sauvegardée
+        saved_platform = cfg.get("comp_last_platform", "discord")
+        if saved_platform not in self._platform_btns:
+            saved_platform = "discord"
+        self._platform_btns[saved_platform].setChecked(True)
+        self._selected_platform = saved_platform
+        self._update_platform_desc(saved_platform)
+        self.custom_row.setVisible(saved_platform == "custom")
 
         root.addStretch()
 
@@ -1603,6 +1656,7 @@ class CompressorTab(QWidget):
         for k, btn in self._platform_btns.items(): btn.setChecked(k == key)
         self.custom_row.setVisible(key == "custom")
         self._update_platform_desc(key)
+        cfg.set("comp_last_platform", key)
         self._refresh_compare()
 
     def _update_platform_desc(self, key: str) -> None:
@@ -2470,35 +2524,17 @@ class MainWindow(QMainWindow):
         self.tabs.setTabVisible(3, False)
 
         _ic_color = COLORS.get("text_secondary", "#8A96B8")
+        # stroke_width=1.8 à 16px pour cohérence visuelle (proportionnel à 2.0 à 18-26px)
         for icon_name, idx in [("download", 0), ("convert", 1), ("compress", 2)]:
-            self.tabs.setTabIcon(idx, svg_icon(icon_name, color=_ic_color, size=16))
+            self.tabs.setTabIcon(idx, svg_icon(icon_name, color=_ic_color, size=16, stroke_width=1.8))
 
         # ── Bouton Paramètres en coin droit de la TabBar ──────────────────────
         self._settings_corner_btn = QPushButton("  ⚙  Paramètres  ")
+        self._settings_corner_btn.setObjectName("corner_settings_btn")
         self._settings_corner_btn.setCheckable(True)
         self._settings_corner_btn.setFixedHeight(34)
         self._settings_corner_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._settings_corner_btn.setStyleSheet(
-            f"QPushButton {{"
-            f"  background: transparent;"
-            f"  color: {COLORS['text_secondary']};"
-            f"  border: none;"
-            f"  border-left: 1px solid {COLORS['border_soft']};"
-            f"  border-radius: 0;"
-            f"  padding: 0 18px;"
-            f"  font-size: 13px;"
-            f"  font-weight: 500;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: {COLORS['bg_hover']};"
-            f"  color: {COLORS['text_primary']};"
-            f"}}"
-            f"QPushButton:checked {{"
-            f"  background: {COLORS['bg_card']};"
-            f"  color: {COLORS['accent_light']};"
-            f"  border-bottom: 2px solid {COLORS['accent']};"
-            f"}}"
-        )
+        # Le style est défini dans ui_styles.py via #corner_settings_btn
         self._settings_corner_btn.clicked.connect(self._toggle_settings)
         self.tabs.setCornerWidget(self._settings_corner_btn, Qt.Corner.TopRightCorner)
 
