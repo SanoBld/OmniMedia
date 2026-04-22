@@ -1,13 +1,12 @@
 """
-main.py — OmniMedia v5.1
-v5.1 :
-  - Persistance complète des préférences : mode téléchargement, bitrate, résolution,
-    playlist, format de conversion, preset, plateforme compression, qualité audio
-  - Bug thème Auto/System : QTimer de re-détection toutes les 30s pour suivre
-    le changement OS dark/light sans redémarrage
-  - Animation onglets : fondu + translation verticale légère (effet levitation)
-  - hline() / vline() : style via QSS pour cohérence avec tous les thèmes
-  - Cohérence visuelle : stroke_width normalisé, espacement amélioré
+main.py — OmniMedia v5.5
+v5.5 :
+  - Icônes SVG inline remplacent les emojis dans les sections clés
+  - Surlignage souris adapté au thème via QSS
+  - Console Windows masquée (CREATE_NO_WINDOW sur tous les subprocess)
+  - MusicBrainz : enrichissement metadata audio (artiste, album, genre, ISRC, MBID…)
+  - À propos enrichi : tous les services utilisés avec remerciements
+  - Sections vitesse/ETA corrigées (polices sans fallback emoji)
 """
 from __future__ import annotations
 
@@ -77,7 +76,7 @@ from converter import (
 )
 
 APP_NAME    = "OmniMedia"
-APP_VERSION = "5.1.0"
+APP_VERSION = "5.5.0"
 LOGO_PATH   = resource_path("logoOmniMedia.png")
 
 set_language(cfg.language)
@@ -202,9 +201,12 @@ class ThemeManager:
 
 def open_folder(path: str | Path) -> None:
     p = Path(path); target = p if p.is_dir() else p.parent
-    if sys.platform == "win32":    os.startfile(str(target))
-    elif sys.platform == "darwin": subprocess.Popen(["open", str(target)])
-    else:                          subprocess.Popen(["xdg-open", str(target)])
+    if sys.platform == "win32":
+        os.startfile(str(target))
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.Popen(["xdg-open", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def hline() -> QFrame:
     f = QFrame(); f.setFrameShape(QFrame.Shape.HLine); f.setFixedHeight(1)
@@ -651,14 +653,18 @@ class DownloadAdvancedPanel(QWidget):
 
     def _setup_ui(self) -> None:
         outer = QVBoxLayout(self); outer.setContentsMargins(0,0,0,0); outer.setSpacing(6)
-        self.toggle_btn = QPushButton(t("adv_options_closed"))
+        # Restaurer l'état ouvert/fermé
+        _panel_open = cfg.get("adv_panel_open", False)
+        self.toggle_btn = QPushButton(t("adv_options_open" if _panel_open else "adv_options_closed"))
         self.toggle_btn.setObjectName("btn_advanced"); self.toggle_btn.setCheckable(True)
+        self.toggle_btn.setChecked(_panel_open)
         self.toggle_btn.setFixedHeight(32)
         self.toggle_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.toggle_btn.clicked.connect(self._toggle)
         outer.addWidget(self.toggle_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        self.panel = QFrame(); self.panel.setObjectName("advanced_panel"); self.panel.hide()
+        self.panel = QFrame(); self.panel.setObjectName("advanced_panel")
+        self.panel.setVisible(_panel_open)   # ouvert si sauvegardé comme tel
         pl = QVBoxLayout(self.panel); pl.setContentsMargins(20,18,20,18); pl.setSpacing(18)
 
         row1 = QHBoxLayout(); row1.setSpacing(20)
@@ -772,6 +778,7 @@ class DownloadAdvancedPanel(QWidget):
         visible = self.panel.isVisible()
         self.panel.setVisible(not visible)
         self.toggle_btn.setText(t("adv_options_open" if not visible else "adv_options_closed"))
+        cfg.set("adv_panel_open", not visible)
         if not visible and cfg.animations_enabled:
             eff = QGraphicsOpacityEffect(self.panel)
             self.panel.setGraphicsEffect(eff)
@@ -781,6 +788,7 @@ class DownloadAdvancedPanel(QWidget):
             anim.setEndValue(1.0)
             anim.setEasingCurve(QEasingCurve.Type.OutCubic)
             anim.finished.connect(lambda: self.panel.setGraphicsEffect(None))
+            self._toggle_anim = anim  # anti-GC
             anim.start()
 
     def _pick_cookie(self) -> None:
@@ -800,7 +808,7 @@ class DownloadAdvancedPanel(QWidget):
         if ok: self._cookies_path = result; set_status(self.browser_status, f"✔ {Path(result).name}", "ok")
         else: set_status(self.browser_status, f"✗ {result[:60]}", "err")
 
-    def get_options(self) -> AdvancedOptions:
+    def get_options(self, output_format: str = "") -> AdvancedOptions:
         return AdvancedOptions(
             audio_bitrate   = self.bitrate_combo.currentData(),
             video_codec     = "h264",
@@ -810,6 +818,7 @@ class DownloadAdvancedPanel(QWidget):
             browser_cookies = "",
             embed_thumbnail = self.embed_thumb_cb.isChecked(),
             ignore_errors   = self.ignore_errors_cb.isChecked(),
+            output_format   = output_format,
         )
 
     def playlist_mode_enabled(self) -> bool: return self.playlist_mode_cb.isChecked()
@@ -855,16 +864,32 @@ class DownloadTab(QWidget):
 
         cl.addSpacing(4)
         cl.addWidget(make_section(t("format_section")))
-        fmt_row = QHBoxLayout(); fmt_row.setSpacing(20)
-        self.rb_video = QRadioButton(t("video_format"))
-        self.rb_audio = QRadioButton(t("audio_format"))
-        # Restaurer le mode sauvegardé
+
+        fmt_row = QHBoxLayout(); fmt_row.setSpacing(8)
+
+        # Mode Vidéo / Audio — 2 boutons radio
+        self.rb_video = QRadioButton("🎬  Vidéo")
+        self.rb_audio = QRadioButton("🎵  Audio")
         saved_mode = cfg.get("dl_mode", "video")
         self.rb_audio.setChecked(saved_mode == "audio")
         self.rb_video.setChecked(saved_mode != "audio")
         grp = QButtonGroup(self); grp.addButton(self.rb_video); grp.addButton(self.rb_audio)
-        self.rb_video.toggled.connect(lambda v: cfg.set("dl_mode", "video" if v else "audio"))
-        fmt_row.addWidget(self.rb_video); fmt_row.addWidget(self.rb_audio); fmt_row.addStretch()
+        self.rb_video.toggled.connect(self._on_mode_changed)
+        fmt_row.addWidget(self.rb_video); fmt_row.addWidget(self.rb_audio)
+        fmt_row.addSpacing(16)
+
+        # Format de sortie — combo détaillé
+        self.dl_fmt_combo = QComboBox(); self.dl_fmt_combo.setMinimumWidth(180)
+        self._update_format_combo(saved_mode)
+        saved_fmt = cfg.get("dl_output_format", "")
+        # Tenter de restaurer le format sauvegardé
+        fi = self.dl_fmt_combo.findData(saved_fmt)
+        if fi >= 0: self.dl_fmt_combo.setCurrentIndex(fi)
+        self.dl_fmt_combo.currentIndexChanged.connect(
+            lambda: cfg.set("dl_output_format", self.dl_fmt_combo.currentData())
+        )
+        fmt_row.addWidget(self.dl_fmt_combo)
+        fmt_row.addStretch()
         cl.addLayout(fmt_row)
 
         cl.addSpacing(4)
@@ -913,9 +938,9 @@ class DownloadTab(QWidget):
         # Vitesse
         speed_col = QVBoxLayout(); speed_col.setSpacing(1); speed_col.setContentsMargins(0,0,0,0)
         speed_lbl_title = QLabel("VITESSE")
-        speed_lbl_title.setStyleSheet(f"font-size:9px; font-weight:700; color:{COLORS['text_muted']}; background:transparent; letter-spacing:0.8px;")
+        speed_lbl_title.setStyleSheet(f"font-size:9px; font-weight:700; color:{COLORS['text_muted']}; background:transparent; letter-spacing:0.8px; font-family:'Segoe UI Variable','Segoe UI',sans-serif;")
         self._speed_lbl = QLabel("—")
-        self._speed_lbl.setStyleSheet(f"font-size:13px; font-weight:600; color:{COLORS['text_primary']}; background:transparent;")
+        self._speed_lbl.setStyleSheet(f"font-size:13px; font-weight:600; color:{COLORS['text_primary']}; background:transparent; font-family:'Segoe UI Variable','Segoe UI',sans-serif;")
         speed_col.addWidget(speed_lbl_title)
         speed_col.addWidget(self._speed_lbl)
 
@@ -926,9 +951,9 @@ class DownloadTab(QWidget):
         # ETA
         eta_col = QVBoxLayout(); eta_col.setSpacing(1); eta_col.setContentsMargins(0,0,0,0)
         eta_lbl_title = QLabel("TEMPS RESTANT")
-        eta_lbl_title.setStyleSheet(f"font-size:9px; font-weight:700; color:{COLORS['text_muted']}; background:transparent; letter-spacing:0.8px;")
+        eta_lbl_title.setStyleSheet(f"font-size:9px; font-weight:700; color:{COLORS['text_muted']}; background:transparent; letter-spacing:0.8px; font-family:'Segoe UI Variable','Segoe UI',sans-serif;")
         self._eta_lbl = QLabel("—")
-        self._eta_lbl.setStyleSheet(f"font-size:13px; font-weight:600; color:{COLORS['text_primary']}; background:transparent;")
+        self._eta_lbl.setStyleSheet(f"font-size:13px; font-weight:600; color:{COLORS['text_primary']}; background:transparent; font-family:'Segoe UI Variable','Segoe UI',sans-serif;")
         eta_col.addWidget(eta_lbl_title)
         eta_col.addWidget(self._eta_lbl)
 
@@ -968,26 +993,50 @@ class DownloadTab(QWidget):
         root.addSpacing(8)
         q_hdr = QHBoxLayout()
         q_hdr.addWidget(make_section(t("dl_queue_section"))); q_hdr.addStretch()
+        self._toggle_q_btn = QPushButton("▾"); self._toggle_q_btn.setObjectName("btn_secondary")
+        self._toggle_q_btn.setFixedSize(26, 26); self._toggle_q_btn.setCheckable(True)
+        self._toggle_q_btn.setChecked(cfg.get("show_dl_queue", True))
+        self._toggle_q_btn.setToolTip("Afficher / Masquer la file")
         clear_q = QPushButton(t("dl_queue_clear")); clear_q.setObjectName("btn_secondary")
         clear_q.setFixedHeight(28); clear_q.setStyleSheet("font-size:11px; padding:2px 12px;")
-        clear_q.clicked.connect(self._clear_queue); q_hdr.addWidget(clear_q)
+        clear_q.clicked.connect(self._clear_queue)
+        q_hdr.addWidget(self._toggle_q_btn); q_hdr.addWidget(clear_q)
         root.addLayout(q_hdr)
         self.queue_list = QListWidget(); self.queue_list.setMaximumHeight(165)
         self.queue_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.queue_list.setVisible(cfg.get("show_dl_queue", True))
         root.addWidget(self.queue_list)
+        self._toggle_q_btn.toggled.connect(lambda v: (
+            self.queue_list.setVisible(v),
+            self._toggle_q_btn.setText("▾" if v else "▸"),
+            cfg.set("show_dl_queue", v)
+        ))
+        self._toggle_q_btn.setText("▾" if cfg.get("show_dl_queue", True) else "▸")
 
         # ── Historique ───────────────────────────────────────────────────────
         root.addSpacing(8)
         hist_hdr = QHBoxLayout()
         hist_hdr.addWidget(make_section(t("download_history"))); hist_hdr.addStretch()
+        self._toggle_hist_btn = QPushButton("▾"); self._toggle_hist_btn.setObjectName("btn_secondary")
+        self._toggle_hist_btn.setFixedSize(26, 26); self._toggle_hist_btn.setCheckable(True)
+        self._toggle_hist_btn.setChecked(cfg.get("show_dl_history", True))
+        self._toggle_hist_btn.setToolTip("Afficher / Masquer l'historique")
         clr_hist = QPushButton(t("clear_history")); clr_hist.setObjectName("btn_secondary")
         clr_hist.setFixedHeight(28); clr_hist.setStyleSheet("font-size:11px; padding:2px 12px;")
-        clr_hist.clicked.connect(self._clear_history); hist_hdr.addWidget(clr_hist)
+        clr_hist.clicked.connect(self._clear_history)
+        hist_hdr.addWidget(self._toggle_hist_btn); hist_hdr.addWidget(clr_hist)
         root.addLayout(hist_hdr)
         self.history = QListWidget(); self.history.setMinimumHeight(90)
         self.history.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.history.itemDoubleClicked.connect(self._restore_url)
+        self.history.setVisible(cfg.get("show_dl_history", True))
         root.addWidget(self.history, 1)
+        self._toggle_hist_btn.toggled.connect(lambda v: (
+            self.history.setVisible(v),
+            self._toggle_hist_btn.setText("▾" if v else "▸"),
+            cfg.set("show_dl_history", v)
+        ))
+        self._toggle_hist_btn.setText("▾" if cfg.get("show_dl_history", True) else "▸")
 
         root.addStretch()
 
@@ -1014,6 +1063,41 @@ class DownloadTab(QWidget):
 
     def _clear_history(self) -> None: dl_history.clear(); self.history.clear()
 
+    def _update_format_combo(self, mode: str) -> None:
+        """Met à jour les options du combo format selon le mode vidéo/audio."""
+        self.dl_fmt_combo.blockSignals(True)
+        self.dl_fmt_combo.clear()
+        if mode == "audio":
+            for lbl, val in [
+                ("🎵  MP3  (recommandé)", "mp3"),
+                ("🎵  FLAC  (sans perte)", "flac"),
+                ("🎵  AAC  (Apple / mobile)", "aac"),
+                ("🎵  WAV  (non compressé)", "wav"),
+                ("🎵  OPUS  (léger)", "opus"),
+                ("🎵  M4A  (iTunes / iPhone)", "m4a"),
+                ("🎵  OGG  (Vorbis)", "ogg"),
+            ]:
+                self.dl_fmt_combo.addItem(lbl, val)
+        else:
+            for lbl, val in [
+                ("🎬  MP4  (recommandé)", "mp4"),
+                ("🎬  WEBM  (VP9/AV1)", "webm"),
+                ("🎬  MKV  (sans re-encodage)", "mkv"),
+                ("🎬  AVI  (compatibilité)", "avi"),
+                ("🎬  MOV  (Apple)", "mov"),
+            ]:
+                self.dl_fmt_combo.addItem(lbl, val)
+        self.dl_fmt_combo.blockSignals(False)
+
+    def _on_mode_changed(self, video_checked: bool) -> None:
+        mode = "video" if video_checked else "audio"
+        cfg.set("dl_mode", mode)
+        self._update_format_combo(mode)
+        # Restaurer le dernier format pour ce mode
+        saved = cfg.get("dl_output_format", "")
+        fi = self.dl_fmt_combo.findData(saved)
+        if fi >= 0: self.dl_fmt_combo.setCurrentIndex(fi)
+
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Destination folder")
         if folder: self._output_dir = Path(folder); cfg.download_dir = folder; self.folder_label.setText(folder)
@@ -1037,7 +1121,9 @@ class DownloadTab(QWidget):
         url = self.url_input.text().strip()
         if not url: set_status(self.status_lbl, t("paste_url_first"), "err"); return
         mode = "audio" if self.rb_audio.isChecked() else "video"
-        opts = self.advanced.get_options()
+        out_fmt = self.dl_fmt_combo.currentData() or ("mp3" if mode == "audio" else "mp4")
+        cfg.set("dl_output_format", out_fmt)
+        opts = self.advanced.get_options(output_format=out_fmt)
         playlist = self.advanced.playlist_mode_enabled()
         auto_tag  = self.advanced.auto_tag_enabled()
         self._add_to_queue(url, mode); self._set_busy(True); self.open_btn.hide()
@@ -1077,7 +1163,7 @@ class DownloadTab(QWidget):
 
     def _on_eta(self, eta: str) -> None:
         self._dl_eta = eta
-        self._eta_lbl.setText(f"⏱  {eta}" if eta else "")
+        self._eta_lbl.setText(eta if eta else "—")
 
     def _on_item_error(self, title: str, error: str) -> None:
         """Un élément de playlist a été ignoré — on le marque dans la file."""
@@ -1154,13 +1240,25 @@ class ConvertTab(QWidget):
         q_hdr.addWidget(make_section(t("queue_section"))); q_hdr.addStretch()
         self.batch_count_lbl = QLabel(""); self.batch_count_lbl.setObjectName("status_info")
         q_hdr.addWidget(self.batch_count_lbl)
+        self._toggle_q_btn = QPushButton("▾"); self._toggle_q_btn.setObjectName("btn_secondary")
+        self._toggle_q_btn.setFixedSize(26, 26); self._toggle_q_btn.setCheckable(True)
+        self._toggle_q_btn.setChecked(cfg.get("show_conv_queue", True))
+        self._toggle_q_btn.setToolTip("Afficher / Masquer la file")
         clr_q = QPushButton(t("clear_queue")); clr_q.setObjectName("btn_secondary")
         clr_q.setFixedHeight(26); clr_q.setStyleSheet("font-size:11px; padding:2px 10px;")
-        clr_q.clicked.connect(self._clear_queue); q_hdr.addWidget(clr_q)
+        clr_q.clicked.connect(self._clear_queue)
+        q_hdr.addWidget(self._toggle_q_btn); q_hdr.addWidget(clr_q)
         root.addLayout(q_hdr)
         self.queue_list = QListWidget(); self.queue_list.setMinimumHeight(80); self.queue_list.setMaximumHeight(200)
         self.queue_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.queue_list.setVisible(cfg.get("show_conv_queue", True))
         root.addWidget(self.queue_list)
+        self._toggle_q_btn.toggled.connect(lambda v: (
+            self.queue_list.setVisible(v),
+            self._toggle_q_btn.setText("▾" if v else "▸"),
+            cfg.set("show_conv_queue", v)
+        ))
+        self._toggle_q_btn.setText("▾" if cfg.get("show_conv_queue", True) else "▸")
 
         # ── Carte options ────────────────────────────────────────────────────
         opts_card = QFrame(); opts_card.setObjectName("card")
@@ -1428,13 +1526,25 @@ class CompressorTab(QWidget):
         q_hdr.addWidget(make_section("File d'attente")); q_hdr.addStretch()
         self.batch_count_lbl = QLabel(""); self.batch_count_lbl.setObjectName("status_info")
         q_hdr.addWidget(self.batch_count_lbl)
+        self._toggle_q_btn = QPushButton("▾"); self._toggle_q_btn.setObjectName("btn_secondary")
+        self._toggle_q_btn.setFixedSize(26, 26); self._toggle_q_btn.setCheckable(True)
+        self._toggle_q_btn.setChecked(cfg.get("show_comp_queue", True))
+        self._toggle_q_btn.setToolTip("Afficher / Masquer la file")
         clr_q = QPushButton("🗑  Vider"); clr_q.setObjectName("btn_secondary")
         clr_q.setFixedHeight(26); clr_q.setStyleSheet("font-size:11px; padding:2px 10px;")
-        clr_q.clicked.connect(self._clear_queue); q_hdr.addWidget(clr_q)
+        clr_q.clicked.connect(self._clear_queue)
+        q_hdr.addWidget(self._toggle_q_btn); q_hdr.addWidget(clr_q)
         root.addLayout(q_hdr)
         self.queue_list = QListWidget(); self.queue_list.setMaximumHeight(140)
         self.queue_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.queue_list.setVisible(cfg.get("show_comp_queue", True))
         root.addWidget(self.queue_list)
+        self._toggle_q_btn.toggled.connect(lambda v: (
+            self.queue_list.setVisible(v),
+            self._toggle_q_btn.setText("▾" if v else "▸"),
+            cfg.set("show_comp_queue", v)
+        ))
+        self._toggle_q_btn.setText("▾" if cfg.get("show_comp_queue", True) else "▸")
 
         # ── Carte cible de compression ────────────────────────────────────────
         target_card = QFrame(); target_card.setObjectName("card")
@@ -1901,21 +2011,38 @@ class SettingsTab(QWidget):
 
         # ── Thème ─────────────────────────────────────────────────────────
         app_content.addWidget(make_section("THÈME VISUEL"))
-        theme_row = QHBoxLayout(); theme_row.setSpacing(8)
         self._theme_btns: dict[str, QPushButton] = {}
         current_theme = ThemeManager.current()
+
+        # Ligne 1 : Sombre / OLED / Clair
+        theme_row1 = QHBoxLayout(); theme_row1.setSpacing(8)
         for key, obj_name, label in [
-            ("dark",   "theme_preview_dark",   t("theme_dark")),
-            ("oled",   "theme_preview_oled",   t("theme_oled")),
-            ("light",  "theme_preview_light",  t("theme_light")),
+            ("dark",  "theme_preview_dark",  t("theme_dark")),
+            ("oled",  "theme_preview_oled",  t("theme_oled")),
+            ("light", "theme_preview_light", t("theme_light")),
+        ]:
+            btn = QPushButton(label); btn.setObjectName(obj_name)
+            btn.setCheckable(True); btn.setChecked(key == current_theme)
+            btn.setMinimumWidth(110); btn.setFixedHeight(48)
+            btn.clicked.connect(lambda _, k=key: self._apply_theme(k))
+            self._theme_btns[key] = btn; theme_row1.addWidget(btn)
+        theme_row1.addStretch()
+        app_content.addLayout(theme_row1)
+
+        # Ligne 2 : Suivre le système / Couleur du PC
+        theme_row2 = QHBoxLayout(); theme_row2.setSpacing(8)
+        for key, obj_name, label in [
             ("auto",   "theme_preview_auto",   t("theme_auto")),
             ("system", "theme_preview_system", t("theme_system")),
         ]:
             btn = QPushButton(label); btn.setObjectName(obj_name)
             btn.setCheckable(True); btn.setChecked(key == current_theme)
+            btn.setMinimumWidth(160); btn.setFixedHeight(48)
             btn.clicked.connect(lambda _, k=key: self._apply_theme(k))
-            self._theme_btns[key] = btn; theme_row.addWidget(btn)
-        theme_row.addStretch(); app_content.addLayout(theme_row)
+            self._theme_btns[key] = btn; theme_row2.addWidget(btn)
+        theme_row2.addStretch()
+        app_content.addLayout(theme_row2)
+
         theme_desc = QLabel(t("theme_desc")); theme_desc.setObjectName("subtitle")
         app_content.addWidget(theme_desc)
 
@@ -1948,6 +2075,13 @@ class SettingsTab(QWidget):
         app_content.addWidget(self._anim_toggle)
         anim_hint = QLabel("Désactivez si l'application est lente sur votre PC.")
         anim_hint.setObjectName("subtitle"); app_content.addWidget(anim_hint)
+
+        self._statsbar_toggle = make_toggle(
+            "Afficher la barre de statistiques en bas de l'écran",
+            cfg.get("show_stats_bar", True),
+            lambda v: (cfg.set("show_stats_bar", v), self._apply_statsbar(v)),
+        )
+        app_content.addWidget(self._statsbar_toggle)
 
         root.addWidget(app_card)
 
@@ -2259,13 +2393,108 @@ class SettingsTab(QWidget):
         # ══════════════════════════════════════════════════════════════════════
         # CARTE 9 : À propos
         # ══════════════════════════════════════════════════════════════════════
-        about_card, _, about_content = make_card("ℹ", "À propos")
-        about_content.addWidget(QLabel(f"OmniMedia  v{APP_VERSION}"))
+        about_card, _, about_content = make_card("ℹ", "À propos d'OmniMedia")
+
+        # Logo + titre
+        title_row = QHBoxLayout(); title_row.setSpacing(12)
+        logo_lbl = QLabel()
+        if LOGO_PATH.exists():
+            pm = QPixmap(str(LOGO_PATH)).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                                                 Qt.TransformationMode.SmoothTransformation)
+            logo_lbl.setPixmap(pm)
+        logo_lbl.setStyleSheet("background:transparent;")
+        name_col = QVBoxLayout(); name_col.setSpacing(2)
+        app_lbl = QLabel(f"OmniMedia  <span style='font-size:13px;font-weight:400;color:{COLORS['text_muted']};'>v{APP_VERSION}</span>")
+        app_lbl.setStyleSheet(f"font-size:20px; font-weight:800; color:{COLORS['text_primary']}; background:transparent;")
+        app_lbl.setTextFormat(Qt.TextFormat.RichText)
+        tag_lbl = QLabel("Tous les formats. Sans limites.")
+        tag_lbl.setStyleSheet(f"font-size:12px; color:{COLORS['text_secondary']}; background:transparent;")
+        name_col.addWidget(app_lbl); name_col.addWidget(tag_lbl)
+        title_row.addWidget(logo_lbl); title_row.addLayout(name_col); title_row.addStretch()
+        about_content.addLayout(title_row)
+
         self.version_status = QLabel(t("checking_version"))
-        self.version_status.setObjectName("status_info"); about_content.addWidget(self.version_status)
-        gh = QLabel(f'<a href="https://github.com/SanoBld/OmniMedia" style="color:#5A96FF;">{t("github_link")}</a>')
-        gh.setOpenExternalLinks(True); gh.setTextFormat(Qt.TextFormat.RichText)
-        about_content.addWidget(gh)
+        self.version_status.setObjectName("status_info")
+        about_content.addWidget(self.version_status)
+
+        about_content.addSpacing(6)
+        desc = QLabel(
+            "OmniMedia est une application de bureau gratuite et open-source pour "
+            "télécharger, convertir et compresser vos fichiers médias. "
+            "Elle fonctionne entièrement en local — aucune donnée personnelle n'est envoyée."
+        )
+        desc.setObjectName("subtitle"); desc.setWordWrap(True)
+        about_content.addWidget(desc)
+
+        about_content.addSpacing(14)
+
+        # ── Moteurs open-source ────────────────────────────────────────────────
+        about_content.addWidget(make_section("MOTEURS OPEN-SOURCE"))
+        _c = COLORS["accent_light"]
+        _services = [
+            ("yt-dlp",      "https://github.com/yt-dlp/yt-dlp",           "Téléchargement  (1000+ sites)"),
+            ("FFmpeg",       "https://ffmpeg.org",                          "Conversion & compression"),
+            ("PyQt6",        "https://riverbankcomputing.com",              "Interface graphique"),
+            ("mutagen",      "https://github.com/quodlibet/mutagen",        "Tags audio (ID3, FLAC…)"),
+            ("darkdetect",   "https://github.com/albertosottile/darkdetect","Détection thème OS"),
+        ]
+        for eng, url, role in _services:
+            row = QHBoxLayout(); row.setSpacing(8)
+            lnk = QLabel(f'<a href="{url}" style="color:{_c}; font-weight:700; text-decoration:none;">{eng}</a>')
+            lnk.setOpenExternalLinks(True); lnk.setTextFormat(Qt.TextFormat.RichText)
+            lnk.setStyleSheet("background:transparent; min-width:100px;")
+            rl = QLabel(f"— {role}"); rl.setObjectName("subtitle")
+            row.addWidget(lnk); row.addWidget(rl, 1)
+            about_content.addLayout(row)
+
+        about_content.addSpacing(14)
+
+        # ── Services externes utilisés ─────────────────────────────────────────
+        about_content.addWidget(make_section("SERVICES EXTERNES"))
+        _ext = [
+            ("MusicBrainz",  "https://musicbrainz.org",                   "Métadonnées musicales (titre, artiste, album, ISRC, genre…)"),
+            ("YouTube",      "https://youtube.com",                        "Source principale de téléchargement via yt-dlp"),
+            ("GitHub API",   "https://api.github.com",                     "Vérification des mises à jour de l'application"),
+            ("Lucide Icons", "https://lucide.dev",                         "Bibliothèque d'icônes SVG"),
+        ]
+        for svc, url, role in _ext:
+            row = QHBoxLayout(); row.setSpacing(8)
+            lnk = QLabel(f'<a href="{url}" style="color:{_c}; font-weight:700; text-decoration:none;">{svc}</a>')
+            lnk.setOpenExternalLinks(True); lnk.setTextFormat(Qt.TextFormat.RichText)
+            lnk.setStyleSheet("background:transparent; min-width:100px;")
+            rl = QLabel(f"— {role}"); rl.setObjectName("subtitle")
+            row.addWidget(lnk); row.addWidget(rl, 1)
+            about_content.addLayout(row)
+
+        about_content.addSpacing(14)
+
+        # ── Remerciements ──────────────────────────────────────────────────────
+        about_content.addWidget(make_section("REMERCIEMENTS"))
+        thanks = QLabel(
+            "Un merci à <b>yt-dlp</b>, "
+            "<b>FFmpeg</b>, <b>MusicBrainz</b>, <b>mutagen</b>, <b>PyQt6</b> et "
+            "<b>Lucide</b> — sans qui OmniMedia ne serait qu'une page blanche. "
+        )
+        thanks.setObjectName("subtitle"); thanks.setWordWrap(True)
+        thanks.setTextFormat(Qt.TextFormat.RichText)
+        about_content.addWidget(thanks)
+
+        about_content.addSpacing(12)
+
+        # ── Liens projet ───────────────────────────────────────────────────────
+        links_row = QHBoxLayout(); links_row.setSpacing(10)
+        for label, url in [
+            ("GitHub", "https://github.com/SanoBld/OmniMedia"),
+            ("Releases", "https://github.com/SanoBld/OmniMedia/releases"),
+            ("Signaler un bug", "https://github.com/SanoBld/OmniMedia/issues"),
+        ]:
+            btn = QPushButton(label); btn.setObjectName("btn_secondary")
+            btn.setFixedHeight(34)
+            btn.clicked.connect(lambda _, u=url: __import__("webbrowser").open(u))
+            links_row.addWidget(btn)
+        links_row.addStretch()
+        about_content.addLayout(links_row)
+
         root.addWidget(about_card)
 
         root.addStretch()
@@ -2325,6 +2554,11 @@ class SettingsTab(QWidget):
 
     def _on_anim_toggled(self, enabled: bool) -> None:
         cfg.animations_enabled = enabled
+
+    def _apply_statsbar(self, visible: bool) -> None:
+        win = self.window()
+        if hasattr(win, "_stats_bar"):
+            win._stats_bar.setVisible(visible)
 
     def _choose_output_dir(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Dossier de sortie par défaut")
@@ -2546,8 +2780,9 @@ class MainWindow(QMainWindow):
         self._drag_overlay.set_drop_callback(self._route_drop)
         self._drag_overlay.hide()
 
-        # Dashboard stats
+        # Dashboard stats — visible selon préférence
         self._stats_bar = StatsBar()
+        self._stats_bar.setVisible(cfg.get("show_stats_bar", True))
         root.addWidget(self._stats_bar)
 
         footer = QLabel(t("footer", ver=APP_VERSION))

@@ -53,6 +53,7 @@ _DEFAULTS: dict[str, Any] = {
     "dl_max_resolution"  : "best",        # résolution vidéo par défaut
     "dl_mode"            : "video",       # "video" | "audio"
     "dl_playlist_items"  : "",            # plage items playlist
+    "dl_output_format"   : "",            # format de sortie ("mp3","flac","mp4","webm"…)
     # ── Other ──────────────────────────────────────────────────────────────
     "embed_thumbnail"    : True,
     "auto_tag"           : True,
@@ -66,6 +67,13 @@ _DEFAULTS: dict[str, Any] = {
     # ── Compression ────────────────────────────────────────────────────────
     "comp_last_platform" : "discord",     # dernière plateforme sélectionnée
     "comp_audio_kbps"    : 128,           # qualité audio compression
+    # ── Visibilité UI ──────────────────────────────────────────────────────
+    "show_stats_bar"     : True,
+    "show_dl_queue"      : True,
+    "show_dl_history"    : True,
+    "show_conv_queue"    : True,
+    "show_comp_queue"    : True,
+    "adv_panel_open"     : False,         # options avancées téléchargement
 }
 
 

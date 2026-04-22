@@ -66,6 +66,7 @@ class AdvancedOptions:
     browser_cookies: str  = ""
     embed_thumbnail: bool = True
     ignore_errors:   bool = True   # Playlist : continuer même en cas d'erreur sur un élément
+    output_format:   str  = ""     # "" = défaut selon mode (mp3/mp4), sinon format explicite
 
 
 # ── Download History ──────────────────────────────────────────────────────────
@@ -109,16 +110,122 @@ class DownloadHistory:
 history = DownloadHistory()
 
 
+# ── MusicBrainz metadata enrichment ──────────────────────────────────────────
+
+_MB_BASE = "https://musicbrainz.org/ws/2"
+_MB_HEADERS = {
+    "User-Agent": "OmniMedia/5.5.0 (https://github.com/SanoBld/OmniMedia)",
+    "Accept": "application/json",
+}
+
+def _query_musicbrainz(title: str, artist: str) -> dict:
+    """
+    Query MusicBrainz to enrich audio metadata.
+    Returns a dict with enriched fields or {} on failure.
+    All errors are silently caught — this is optional enrichment.
+    """
+    if not title:
+        return {}
+    try:
+        import urllib.parse
+        # Search for recording matching title + artist
+        query_parts = [f'recording:"{urllib.parse.quote(title)}"']
+        if artist:
+            query_parts.append(f'artist:"{urllib.parse.quote(artist)}"')
+        query = " AND ".join(query_parts)
+        url = (
+            f"{_MB_BASE}/recording"
+            f"?query={urllib.parse.quote(query)}&limit=1&inc=artists+releases+genres+isrcs"
+            f"&fmt=json"
+        )
+        req = urllib.request.Request(url, headers=_MB_HEADERS)
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8"))
+
+        recordings = data.get("recordings", [])
+        if not recordings:
+            return {}
+        rec = recordings[0]
+
+        # ── Score de pertinence minimum ───────────────────────────────────────
+        score = int(rec.get("score", 0))
+        if score < 60:
+            return {}
+
+        enriched: dict = {}
+        enriched["mbid"] = rec.get("id", "")
+
+        # Titre officiel
+        if rec.get("title"):
+            enriched["title"] = rec["title"]
+
+        # Artiste(s)
+        artist_credits = rec.get("artist-credit", [])
+        if artist_credits:
+            artists = " & ".join(
+                ac.get("artist", {}).get("name", ac.get("name", ""))
+                for ac in artist_credits
+                if isinstance(ac, dict)
+            )
+            if artists:
+                enriched["artist"] = artists
+            # Sort name du premier artiste
+            if artist_credits[0]:
+                sort = artist_credits[0].get("artist", {}).get("sort-name", "")
+                if sort: enriched["artist_sort"] = sort
+
+        # Genres (tags MusicBrainz)
+        genres = rec.get("genres") or rec.get("tags", [])
+        if genres:
+            enriched["genre"] = genres[0].get("name", "")
+
+        # ISRC
+        isrcs = rec.get("isrcs", [])
+        if isrcs:
+            enriched["isrc"] = isrcs[0]
+
+        # Release (album, date, label, tracknumber)
+        releases = rec.get("releases", [])
+        if releases:
+            rel = releases[0]
+            if rel.get("title"):
+                enriched["album"] = rel["title"]
+            date = rel.get("date", "")
+            if date:
+                enriched["year"] = date[:4]
+            # Numéro de piste
+            media_list = rel.get("media", [])
+            if media_list:
+                tracks = media_list[0].get("tracks", [])
+                if tracks:
+                    enriched["tracknumber"] = str(tracks[0].get("number", ""))
+                enriched["discnumber"] = str(media_list[0].get("position", ""))
+
+            # Label
+            label_info = rel.get("label-info", [])
+            if label_info and isinstance(label_info, list):
+                label = label_info[0].get("label", {})
+                if label.get("name"):
+                    enriched["label"] = label["name"]
+                if label_info[0].get("catalog-number"):
+                    enriched["catalog"] = label_info[0]["catalog-number"]
+
+        logger.info("[MusicBrainz] Enriched: %s (score=%d MBID=%s)",
+                    enriched.get("title", title), score, enriched.get("mbid", "?"))
+        return enriched
+
+    except Exception as exc:
+        logger.debug("[MusicBrainz] Query failed for '%s': %s", title, exc)
+        return {}
+
+
 # ── Smart auto-tagger ─────────────────────────────────────────────────────────
 
 def _embed_id3_tags(filepath: Path, info: dict) -> None:
     """
-    Embed ID3 tags (title, artist, album, year, genre) and cover art
-    into an MP3 file using mutagen.
-
-    FIX v4.1: This function is now called with the CORRECT path obtained
-    via postprocessor_hooks instead of a guessed path from the pre-FFmpeg
-    progress hook. The thumbnail is downloaded directly from info["thumbnail"].
+    Embed ID3 tags (title, artist, album, year, genre, tracknumber, ISRC, MBID…)
+    into an MP3/audio file using mutagen.
+    Enriched first via MusicBrainz API, falls back to yt-dlp metadata.
     """
     if not MUTAGEN_AVAILABLE:
         return
@@ -128,28 +235,61 @@ def _embed_id3_tags(filepath: Path, info: dict) -> None:
 
     try:
         from mutagen.id3 import (
-            ID3, TIT2, TPE1, TALB, TDRC, TCON, APIC, ID3NoHeaderError
+            ID3, TIT2, TPE1, TPE2, TALB, TDRC, TCON, APIC,
+            TRCK, TPOS, TPUB, TSRC, TXXX, ID3NoHeaderError
         )
         try:
             tags = ID3(str(filepath))
         except ID3NoHeaderError:
             tags = ID3()
 
+        # ── Données de base depuis yt-dlp ─────────────────────────────────────
         title    = info.get("title", "")
         uploader = info.get("uploader") or info.get("channel", "")
         album    = info.get("album") or info.get("playlist_title", "")
         year     = str(info.get("upload_date", ""))[:4]
         genre    = info.get("genre", "")
 
+        # ── Enrichissement MusicBrainz ────────────────────────────────────────
+        mb = _query_musicbrainz(title, uploader)
+        if mb:
+            if mb.get("title"):   title    = mb["title"]
+            if mb.get("artist"):  uploader = mb["artist"]
+            if mb.get("album"):   album    = mb["album"]
+            if mb.get("year"):    year     = mb["year"]
+            if mb.get("genre"):   genre    = mb["genre"]
+
+        # ── Tags principaux ───────────────────────────────────────────────────
         if title:    tags["TIT2"] = TIT2(encoding=3, text=title)
         if uploader: tags["TPE1"] = TPE1(encoding=3, text=uploader)
         if album:    tags["TALB"] = TALB(encoding=3, text=album)
         if year:     tags["TDRC"] = TDRC(encoding=3, text=year)
         if genre:    tags["TCON"] = TCON(encoding=3, text=genre)
 
-        # Cover art — iterate thumbnails list (highest quality first)
+        # ── Tags enrichis MusicBrainz ──────────────────────────────────────────
+        if mb.get("artist_sort"):
+            tags["TSOP"] = __import__("mutagen.id3", fromlist=["TSOP"]).TSOP(
+                encoding=3, text=mb["artist_sort"]
+            )
+        if mb.get("tracknumber"):
+            tags["TRCK"] = TRCK(encoding=3, text=mb["tracknumber"])
+        if mb.get("discnumber"):
+            tags["TPOS"] = TPOS(encoding=3, text=mb["discnumber"])
+        if mb.get("label"):
+            tags["TPUB"] = TPUB(encoding=3, text=mb["label"])
+        if mb.get("isrc"):
+            tags["TSRC"] = TSRC(encoding=3, text=mb["isrc"])
+        if mb.get("mbid"):
+            tags["TXXX:MusicBrainz Recording Id"] = TXXX(
+                encoding=3, desc="MusicBrainz Recording Id", text=mb["mbid"]
+            )
+        if mb.get("catalog"):
+            tags["TXXX:CATALOGNUMBER"] = TXXX(
+                encoding=3, desc="CATALOGNUMBER", text=mb["catalog"]
+            )
+
+        # ── Cover art ─────────────────────────────────────────────────────────
         thumbnails = info.get("thumbnails") or []
-        # Sort by preference: prefer JPG, larger resolution
         if thumbnails:
             sorted_thumbs = sorted(
                 thumbnails,
@@ -159,7 +299,6 @@ def _embed_id3_tags(filepath: Path, info: dict) -> None:
         else:
             sorted_thumbs = []
 
-        # Fallback to simple "thumbnail" key
         thumb_url = info.get("thumbnail", "")
         if sorted_thumbs:
             thumb_url = sorted_thumbs[0].get("url", thumb_url)
@@ -171,26 +310,23 @@ def _embed_id3_tags(filepath: Path, info: dict) -> None:
                 )
                 with urllib.request.urlopen(req, timeout=10) as r:
                     img_data = r.read()
-                # Determine MIME type from URL or content
                 url_lower = thumb_url.lower().split("?")[0]
                 if url_lower.endswith(".png"):
                     mime = "image/png"
                 elif url_lower.endswith(".webp"):
                     mime = "image/webp"
                 else:
-                    mime = "image/jpeg"  # most common for YouTube thumbnails
-
+                    mime = "image/jpeg"
                 tags["APIC"] = APIC(
                     encoding=3, mime=mime,
-                    type=3,       # Cover (front)
-                    desc="Cover",
-                    data=img_data,
+                    type=3, desc="Cover", data=img_data,
                 )
             except Exception as e:
                 logger.warning("[AutoTag] Thumbnail download failed: %s", e)
 
         tags.save(str(filepath), v2_version=3)
-        logger.info("[AutoTag] Tags embedded: %s", filepath.name)
+        logger.info("[AutoTag] Tags embedded: %s (MusicBrainz: %s)",
+                    filepath.name, "yes" if mb else "no")
 
     except Exception as exc:
         logger.error("[AutoTag] Could not embed tags in %s: %s", filepath, exc, exc_info=True)
@@ -361,14 +497,25 @@ class DownloadWorker(QThread):
 
         if self.mode == "audio":
             opts["format"] = "bestaudio/best"
-            # yt-dlp ajoute "PP" en interne → la clé est sans le suffixe "PP"
+            # Déterminer le codec audio cible
+            audio_fmt = (o.output_format or "mp3").lower()
+            # Formats supportés par FFmpegExtractAudio
+            _lossless = {"flac", "wav", "alac"}
+            _extract_codecs = {"mp3", "aac", "flac", "wav", "opus", "vorbis", "m4a", "ogg"}
+            if audio_fmt == "ogg":
+                codec = "vorbis"
+            elif audio_fmt == "m4a":
+                codec = "m4a"
+            elif audio_fmt in _extract_codecs:
+                codec = audio_fmt
+            else:
+                codec = "mp3"  # fallback
+
+            pp_extract: dict = {"key": "FFmpegExtractAudio", "preferredcodec": codec}
+            if codec not in _lossless:
+                pp_extract["preferredquality"] = o.audio_bitrate.rstrip("k")
             opts["postprocessors"] = [
-                {
-                    "key"             : "FFmpegExtractAudio",
-                    "preferredcodec"  : "mp3",
-                    "preferredquality": o.audio_bitrate.rstrip("k"),
-                },
-                # Embed métadonnées (titre, artiste, album, date, genre…)
+                pp_extract,
                 {"key": "FFmpegMetadata", "add_metadata": True},
             ]
             if o.embed_thumbnail:
@@ -384,8 +531,18 @@ class DownloadWorker(QThread):
                 "480" : "bestvideo[height<=480]+bestaudio/best",
                 "360" : "bestvideo[height<=360]+bestaudio/best",
             }
-            opts["format"]              = res_map.get(o.max_resolution, "bestvideo+bestaudio/best")
-            opts["merge_output_format"] = "mp4"
+            opts["format"] = res_map.get(o.max_resolution, "bestvideo+bestaudio/best")
+            # Format de conteneur vidéo
+            video_fmt = (o.output_format or "mp4").lower()
+            if video_fmt == "mkv":
+                # MKV : stream copy sans re-encodage
+                opts["merge_output_format"] = "mkv"
+            elif video_fmt == "webm":
+                opts["merge_output_format"] = "webm"
+            elif video_fmt in ("avi", "mov"):
+                opts["merge_output_format"] = video_fmt
+            else:
+                opts["merge_output_format"] = "mp4"
             opts["postprocessors"] = [
                 {"key": "FFmpegMetadata", "add_metadata": True},
             ]

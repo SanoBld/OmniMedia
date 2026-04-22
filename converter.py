@@ -7,7 +7,7 @@ New in v4.5: check_ffmpeg_capabilities() validates version and available
 """
 from __future__ import annotations
 
-import os, shutil, subprocess, re, json
+import sys, os, shutil, subprocess, re, json
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
@@ -100,18 +100,21 @@ def check_ffmpeg_capabilities() -> FFmpegCapabilities:
     codecs: dict[str, bool] = {}
     warnings: list[str] = []
 
+    # Masquer la console sur Windows
+    _no_win: dict = {}
+    if sys.platform == "win32":
+        _no_win["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+
     # ── 1. Version ────────────────────────────────────────────────────────────
     try:
         result = subprocess.run(
             [ffmpeg, "-version"],
-            capture_output=True, text=True, timeout=8,
+            capture_output=True, text=True, timeout=8, **_no_win,
         )
         first_line = result.stdout.splitlines()[0] if result.stdout else ""
-        # e.g. "ffmpeg version 6.1.1 Copyright …"  or "ffmpeg version N-112053-g…"
         m = re.search(r"version\s+([\d.N\-]+)", first_line)
         if m:
             version_str = m.group(1)
-        # Build year is in the copyright line: "Copyright (c) 2000-2023 …"
         year_m = re.search(r"2000-(\d{4})", result.stdout)
         if year_m:
             year = int(year_m.group(1))
@@ -140,7 +143,7 @@ def check_ffmpeg_capabilities() -> FFmpegCapabilities:
     try:
         result = subprocess.run(
             [ffmpeg, "-codecs"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, **_no_win,
         )
         output = result.stdout.lower()
         for key in CODEC_KEYS:
@@ -232,13 +235,16 @@ def get_media_info(path: Path) -> MediaInfo:
         ffprobe = find_ffprobe()
         if ffprobe:
             try:
+                _nw: dict = {}
+                if sys.platform == "win32":
+                    _nw["creationflags"] = 0x08000000
                 result = subprocess.run(
                     [
                         ffprobe, "-v", "quiet",
                         "-print_format", "json",
                         "-show_format", str(path),
                     ],
-                    capture_output=True, text=True, timeout=8,
+                    capture_output=True, text=True, timeout=8, **_nw,
                 )
                 data     = json.loads(result.stdout)
                 duration = float(data["format"]["duration"])
@@ -575,15 +581,21 @@ def _convert_sync(
     duration  = get_media_info(input_path).duration
     time_re   = re.compile(r"time=(\d+):(\d+):(\d+\.?\d*)")
 
+    # Masquer la console sur Windows
+    _kwargs: dict = {}
+    if sys.platform == "win32":
+        import ctypes
+        _kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+
     try:
         if use_shell:
             cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
             proc = subprocess.Popen(cmd_str, shell=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    universal_newlines=True)
+                                    universal_newlines=True, **_kwargs)
         else:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    universal_newlines=True)
+                                    universal_newlines=True, **_kwargs)
 
         for line in proc.stdout:
             m = time_re.search(line)

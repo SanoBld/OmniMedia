@@ -189,8 +189,8 @@ QWidget {{
     color: {c['text_primary']};
     font-family: "Segoe UI Variable","Segoe UI","SF Pro Text","Inter","Helvetica Neue",Arial,sans-serif;
     font-size: 13px;
-    selection-background-color: {c['accent_dim']};
-    selection-color: {c['text_primary']};
+    selection-background-color: {c['accent']};
+    selection-color: #FFFFFF;
 }}
 QMainWindow, QDialog {{ background-color: {c['bg_deep']}; }}
 
